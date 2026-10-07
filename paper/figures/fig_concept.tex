@@ -1,0 +1,40 @@
+\begin{tikzpicture}[node distance=6mm and 7mm]
+% ---------------- (a) message-based ----------------
+\node[agent] (a1) {Author};
+\node[agent, right=of a1] (r1) {Reviewers};
+\node[agent, right=of r1] (m1) {Meta-\\reviewer};
+\draw[flow] (a1) -- (r1);
+\draw[flow] (r1) -- (m1);
+\node[op, below=7mm of r1, minimum width=50mm, fill=gray!10] (hist) {Unstructured message history\\(reasoning state is implicit)};
+\draw[flow, gray] (a1) |- (hist.west);
+\draw[flow, gray] (r1) -- (hist);
+\draw[flow, gray] (m1) |- (hist.east);
+\node[op, below=5mm of hist, draw=none, text width=52mm, align=left] (n1) {%
+$\bullet$ acceptance = one agent's verdict\\
+$\bullet$ no explicit state or transition check\\
+$\bullet$ fixed coordination strategy};
+\node[panel, fit=(a1)(m1)(hist)(n1)] (pa) {};
+\node[ttl, above=1mm of pa] {(a) Message-based coordination};
+
+% ---------------- (b) state-centric ----------------
+\node[agent, right=30mm of m1] (a2) {Author};
+\node[wm, right=13mm of a2, minimum width=41mm, minimum height=23mm] (w) {};
+\node[ttl, anchor=north] at ([yshift=-1mm]w.north) {World model};
+\node[st] (s0) at ([xshift=-13mm,yshift=-1mm]w.center) {$s_{t-1}$};
+\node[st] (s1) at ([yshift=-1mm]w.center) {$s_{t}$};
+\node[st] (s2) at ([xshift=13mm,yshift=-1mm]w.center) {$s_{t+1}$};
+\draw[flow] (s0) -- (s1);
+\draw[flow] (s1) -- node[above, font=\tiny] {$T$} (s2);
+\node[font=\tiny, anchor=south] at ([yshift=0.5mm]w.south) {validate $V$\quad summarize $\sigma$\quad risk $R$};
+\node[agent, right=13mm of w] (r2) {Reviewers\\+ Meta-rev.};
+\draw[flow] (a2) -- node[lbl, above] {$a_t$} (w);
+\draw[flow] (w) -- node[lbl, above] {$\sigma(s_t)$, $r_t$} (r2);
+\node[gate, below=9mm of w] (g) {acceptance gate\\(consensus, risk)};
+\draw[flow] (r2) |- node[lbl, pos=0.75, below] {votes, confidence} (g);
+\draw[flow] (w) -- (g);
+\draw[fb] (g) -| node[lbl, pos=0.25, below] {revise} (a2);
+\node[op, above=8mm of w, fill=violet!8] (cui) {CUI selector: centralized if $U(D)<\tau$, else peer};
+\draw[flow] (cui) -- (w);
+\node[panel, fit=(a2)(r2)(g)(cui)] (pb) {};
+\node[ttl, above=1mm of pb] {(b) World-model--guided, state-centric coordination (ours)};
+\end{tikzpicture}

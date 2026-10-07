@@ -1,0 +1,20 @@
+\begin{tikzpicture}[node distance=7mm and 12mm]
+\node[agent] (q) {Query $x$};
+\node[agent, right=8mm of q, minimum width=22mm] (a) {Author};
+\node[wm, below=1.2mm of a, minimum width=22mm, font=\scriptsize] (wa) {local WM$_A$: $T$, $V$, $\sigma$};
+\node[agent, right=62mm of a, yshift=8mm, minimum width=20mm] (r1) {Reviewer 1};
+\node[wm, right=1.2mm of r1, font=\scriptsize] (w1) {local WM$_1$};
+\node[agent, below=3mm of r1, minimum width=20mm] (r2) {Reviewer $k$};
+\node[wm, right=1.2mm of r2, font=\scriptsize] (w2) {local WM$_k$};
+\node[agent, below=15mm of r2, minimum width=20mm] (m) {Meta-reviewer};
+\node[wm, right=1.2mm of m, font=\scriptsize] (wmm) {local WM$_M$: $R$};
+\node[agent, fill=green!10] (out) at ($(a |- m)!0.3!(m)$) {Final answer $y$};
+\node[font=\scriptsize, align=center, text width=44mm] at ($(a.east)!0.5!(r2.west)+(0,-11mm)$) {no shared state store,\\no global acceptance gate};
+
+\draw[flow] (q) -- (a);
+\draw[flow] (a.east) -- node[lbl, above, sloped] {\ding{172} answer + summary $\sigma(s^{A}_t)$} (r1.west);
+\draw[flow] (a.east) -- (r2.west);
+\draw[flow] (r2) -- node[lbl, right] {\ding{173} reviews} (m);
+\draw[flow, green!45!black] (m.west) -- node[lbl, above] {\ding{174} ``right'': accept} (out.east);
+\draw[fb] (m.south) -- ++(0,-5mm) -| node[lbl, pos=0.25, below] {\ding{175} ``wrong'': feedback, author revises and re-validates locally} (wa.south);
+\end{tikzpicture}

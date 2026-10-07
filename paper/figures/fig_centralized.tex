@@ -1,0 +1,32 @@
+\begin{tikzpicture}[node distance=7mm and 12mm]
+\node[agent] (q) {Query $x$};
+\node[agent, right=8mm of q, minimum width=16mm] (a) {Author};
+\node[wm, right=22mm of a, minimum width=68mm, minimum height=30mm] (w) {};
+\node[ttl, anchor=north] at ([yshift=-1mm]w.north) {Shared world model (single state store)};
+\node[st] (s0) at ([xshift=-20mm,yshift=2mm]w.center) {$s_0$};
+\node[st] (s1) at ([xshift=-7mm,yshift=2mm]w.center) {$s_1$};
+\node[font=\scriptsize] (sd) at ([xshift=6mm,yshift=2mm]w.center) {$\cdots$};
+\node[st] (s2) at ([xshift=19mm,yshift=2mm]w.center) {$s_t$};
+\draw[flow] (s0) -- (s1); \draw[flow] (s1) -- (sd); \draw[flow] (sd) -- (s2);
+\node[op] (v) at ([xshift=-22mm,yshift=-9.5mm]w.center) {$V$: validate};
+\node[op] (sg) at ([xshift=0mm,yshift=-9.5mm]w.center) {$\sigma$: summarize};
+\node[op] (rr) at ([xshift=22.5mm,yshift=-9.5mm]w.center) {$R$: rollout risk};
+\node[agent, right=24mm of w, yshift=8mm, minimum width=20mm] (r1) {Reviewer 1};
+\node[agent, below=3mm of r1, minimum width=20mm] (r2) {Reviewer $k$};
+\node[gate, below=13mm of w] (g) {WM-guided\\acceptance gate};
+\node[agent, minimum width=20mm] (m) at (r2 |- g) {Meta-reviewer};
+\node[agent, below=8mm of g, fill=green!10] (out) {Final answer $y$};
+
+\draw[flow] (q) -- (a);
+\draw[flow] ([yshift=2mm]a.east) -- node[lbl, above] {\ding{172} action $a_t$} ([yshift=2mm]a.east -| w.west);
+\draw[fb] ([yshift=-2mm]a.east -| w.west) -- node[lbl, below] {\ding{173} invalid: revise} ([yshift=-2mm]a.east);
+\draw[flow] ([yshift=8mm]w.east) -- node[lbl, above] {\ding{174} $\sigma(s_t)$} (r1.west);
+\draw[flow] ([yshift=8mm]w.east) -- ([yshift=1.5mm]r2.west);
+\draw[flow] ([yshift=-2mm]r2.west) -- node[lbl, below, pos=0.45] {\ding{175} reviews} ([yshift=-2mm]r2.west -| w.east);
+\draw[flow] (r2) -- node[lbl, right] {\ding{175} reviews} (m);
+\draw[flow] ([xshift=27mm]w.south) |- node[lbl, pos=0.25, right] {\ding{176} risk $r_t$} ([yshift=2mm]m.west);
+\draw[flow] ([yshift=-2mm]m.west) -- node[lbl, below, pos=0.5] {\ding{177} decision} ([yshift=-2mm]m.west -| g.east) -- (g.east);
+\draw[flow] (w.south) -- node[lbl, left] {$r_t$, consensus,\\confidence} (g.north);
+\draw[flow, green!45!black] (g) -- node[lbl, right] {accept} (out);
+\draw[fb] (g.west) -| node[lbl, pos=0.25, above] {\ding{178} reject: feedback to author;}  node[lbl, pos=0.25, below] {revision $a_{t+1}$, $s_{t+1}{=}T(s_t,a_{t+1})$} (a.south);
+\end{tikzpicture}

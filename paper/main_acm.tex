@@ -1,0 +1,426 @@
+\documentclass[acmsmall,screen,review]{acmart}
+% Version prepared for ACM Collective Intelligence. The earlier IEEE-formatted draft is main.tex.
+
+\usepackage{amsmath}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{array}
+\usepackage{makecell}
+\usepackage{pifont}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric,calc}
+
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+\input{figures/tikzstyle.tex}
+\emergencystretch=2em
+\makeatletter
+\newcommand{\tabinput}[1]{\@@input #1 }
+\makeatother
+
+% \acmJournal{...}  % the journal code must be set according to the journal's author template
+\acmYear{2026}
+\settopmatter{printacmref=false}
+
+\begin{document}
+
+% earlier working title: When LLM Reviewers Agree Too Much: Correlated Errors and Acceptance Mechanisms in Multi-Agent Reasoning
+\title{Independence Before Coordination: Why LLM Collectives Fail to Correct Shared Errors}
+
+\author{Yu Wang}
+\affiliation{\institution{College of Computing, Georgia Institute of Technology}\city{Atlanta}\state{GA}\country{USA}}
+\email{ywang4704@gatech.edu}
+\author{Vijay K. Madisetti}
+\affiliation{\institution{School of Cybersecurity and Privacy, Georgia Institute of Technology}\city{Atlanta}\state{GA}\country{USA}}
+\email{vkm@gatech.edu}
+
+\begin{abstract}
+Multi-agent systems built on large language models (LLMs) are collectives: an author agent proposes an answer, reviewer agents critique it, and a meta-reviewer decides.
+The classical conditions under which a collective outperforms its members---independent judgments and diverse errors---are rarely checked in such systems.
+We check them in a controlled study of a reviewer-style pipeline on eight reasoning benchmarks with four backbone LLMs, evaluating every configuration on identical questions in two independent runs with paired tests, and logging the author's first draft so that the effect of the collective can be measured within each run.
+The collective almost never corrects its members: the meta-reviewer accepts 80--97\% of incorrect drafts in the first round, the four-agent process raises accuracy over the author's draft by 0.3--1.9 points, and the most capable backbone is the one whose reviewers agree most.
+We then test mechanisms that take the acceptance decision away from the agents.
+A lightweight world model that stores every candidate as an explicit state, validates transitions, estimates a trajectory risk from the reviews, and gates acceptance centrally blocks most incorrect drafts, but also most correct ones; the author repairs a blocked error in only 7--23\% of cases, and the net gain over the draft (0.0--1.8 points) is no larger than that of the ungated pipeline, at 1.7--4.3 times the cost.
+A gain of 4.3 points observed on one backbone in the first run was not reproduced in the second; the run-to-run variation of a fixed configuration on fixed questions (up to 4 points) is as large as any difference between configurations.
+A decentralized variant that keeps local state replicas but leaves acceptance to the agents is indistinguishable from the message-based pipeline, and a coordination-uncertainty index computed from reviewer disagreement does not predict which variant is preferable.
+An exploratory gate based on agreement among reviewer answers is precise and cheap but low in recall, because in 80\% of the cases where the author is wrong both reviewers reproduce the same wrong answer; hiding the draft from the reviewers reduces this rate to 48--61\% in two runs, whereas giving the reviewers a different backbone while still showing them the draft does not change it. Crossing blind reviewers with the world-model gate shows that an LLM meta-reviewer who sees the draft overrules the independent reviewers and reintroduces the dependence, while the gate's risk estimate becomes more selective once its evidence is independent.
+Across all methods, including debate-style baselines, collaboration improves on a single chain-of-thought call by at most about two points.
+Taken together, homogeneous LLM collectives exhibit highly correlated judgments and limited error correction, which undermines a key condition for collective intelligence; decomposing their behaviour into detection, challenge, and repair shows that the dominant loss occurs before reconsideration begins, and that in this setting the binding constraint is the independence of the members---in particular their exposure to the candidate answer---rather than the representation of shared state or the communication topology. Collective intelligence in such systems requires not merely multiple agents but sufficiently independent evidence generation together with selective external oversight. We propose the agreement and repair statistics introduced here as standard diagnostics for multi-agent reasoning systems.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+<concept><concept_id>10010147.10010178.10010199</concept_id><concept_desc>Computing methodologies~Multi-agent systems</concept_desc><concept_significance>500</concept_significance></concept>
+<concept><concept_id>10010147.10010178.10010179</concept_id><concept_desc>Computing methodologies~Natural language processing</concept_desc><concept_significance>300</concept_significance></concept>
+</ccs2012>
+\end{CCSXML}
+\ccsdesc[500]{Computing methodologies~Multi-agent systems}
+\ccsdesc[300]{Computing methodologies~Natural language processing}
+
+\keywords{collective intelligence, large language models, multi-agent reasoning, correlated errors, acceptance mechanisms, world models}
+
+\maketitle
+
+\section{Introduction}
+
+A collective is only as intelligent as the independence of its members allows.
+Condorcet's jury theorem, the wisdom-of-crowds literature, and the theory of informational cascades all say the same thing in different vocabularies: aggregating the judgments of several agents helps when their errors are diverse and independent, and stops helping---or hurts---when the agents see and follow one another~\cite{ladha1992condorcet,surowiecki2004wisdom,lorenz2011social,bikhchandani1992cascades}.
+
+Multi-agent systems built on large language models (LLMs) are collectives of a particular kind. In the reviewer-style pipelines that have become common~\cite{du2024improving,liang2024mad,chen2024reconcile,wang2025mars}, an \emph{author} agent proposes an answer, \emph{reviewer} agents critique it, and a \emph{meta-reviewer} decides whether to accept it or send it back. The members of this collective are typically instances of the same model, and each reads the output of the others before judging. Both properties threaten the independence condition. Yet the question of whether such a collective actually corrects its members is seldom asked; evaluations report final accuracy, which conflates what the author would have answered alone with what the collective added.
+
+This paper asks that question directly, and then asks what can be done about the answer.
+We instrument a reviewer-style pipeline so that the author's first draft is logged in every run, which makes the contribution of the collective measurable \emph{within} a run as the change from draft accuracy to final accuracy, together with the rates at which wrong answers are caught and right answers are lost.
+We evaluate every configuration on identical questions from eight reasoning benchmarks with four backbone LLMs, in two independent runs, with paired statistical tests.
+
+The first result is that the collective rarely acts. Without an external acceptance mechanism, the meta-reviewer accepts 80--97\% of incorrect drafts in the first round; the four-agent process raises accuracy over the author's draft by 0.3--1.9 points; and the most capable backbone is the one whose reviewers agree with the author most (on 796 runs it changes four answers).
+
+We then study mechanisms that take the acceptance decision away from the agents, in the spirit of world models in reinforcement learning~\cite{ha2018recurrent,hafner2020dream}: a symbolic state store that records every candidate solution as an explicit state, validates transitions, estimates a trajectory-level risk from the reviews, and, in its \emph{centralized} form, gates acceptance independently of any agent's verdict (Fig.~\ref{fig:concept}). A \emph{peer-to-peer} form keeps local state replicas and leaves acceptance to the agents. We also define a Coordination Uncertainty Index (CUI) from reviewer disagreement and test whether it predicts which form is preferable.
+
+The second result is that an external gate does act, but with little discrimination and at a price: it blocks most incorrect drafts but also most correct ones, a blocked error is repaired by the author in only 7--23\% of cases, and its net effect over the draft (0.0--1.8 points) is no larger than that of the ungated pipeline, at up to 4.3 times the token cost. A gain of 4.3 points on one backbone in the first run disappeared in the second; the run-to-run variation of one configuration on fixed questions is as large as any difference between configurations. The peer-to-peer form has no measurable effect, and the CUI does not predict which form to use.
+
+The third result points to what matters. An ablation shows that the behavioural effect of the gate---fewer incorrect drafts accepted at first sight---is obtained at a third of the cost by merely showing the risk signal to the deciding agent, and an exploratory gate that accepts a draft only when independently derived reviewer answers agree with it is precise and cheap---but it catches only 20\% of errors, because in 80\% of the cases where the author is wrong both reviewers reproduce the same wrong answer. The errors of the collective are correlated, exactly as the classical theory predicts for members who share a model and read each other's output. A direct test confirms the mechanism: reviewers that never see the draft reproduce the author's error substantially less often (48--61\% against 80\% in two runs), while reviewers from a different backbone that do see it reproduce it just as often. Crossing blind reviewers with the gate shows where oversight must sit: a draft-exposed LLM judge at the aggregation stage overrules the independent reviewers, whereas a rule that aggregates their answers and returns their solutions to the author does not.
+
+We organize the study around five questions:
+\begin{itemize}
+    \item \textbf{RQ1} Do reviewer-style LLM collectives actually correct the errors of their members?
+    \item \textbf{RQ2} If not, why: do the reviewers reproduce the author's errors?
+    \item \textbf{RQ3} Is the correlation due to model homogeneity or to information dependence on the candidate answer?
+    \item \textbf{RQ4} Can external oversight---a world-model gate that does not rely on the agents' agreement---help?
+    \item \textbf{RQ5} Which part of such a world model matters, and can oversight and independence be combined?
+\end{itemize}
+
+Our contributions are three.
+\begin{itemize}
+    \item \textbf{Measurement.} A within-run diagnostic for multi-agent reasoning that follows every question from the author's first draft through reviewer agreement, interception, revision, and repair (Fig.~\ref{fig:flow}), instead of reporting final accuracy alone; together with a measurement of run-to-run variation that bounds what single-run comparisons can show (Section~\ref{sec:agreement}).
+    \item \textbf{Empirical finding.} Across four backbone LLMs, 1{,}592 paired questions, and two independent runs, homogeneous reviewer-style collectives show very high agreement with incorrect drafts, so that multi-agent interaction rarely changes the answer, and the strongest backbone is the one that changes it least (Section~\ref{sec:agreement}).
+    \item \textbf{Mechanism and intervention.} Interventions that force reconsideration---a centralized world-model gate, a risk-only variant, and gates based on answer agreement---raise the number of challenged drafts but are limited by weak discrimination and, above all, by correlated errors: when the author is wrong, independent reviewers usually produce the same wrong answer. Hiding the candidate answer from the reviewers reduces the reproduction of errors from 80\% to 48--61\%; changing the reviewers' backbone does not. Two hypotheses of our own earlier work, that decentralized coordination helps on uncertain tasks and that an uncertainty index predicts the preferable topology, are not supported; changing the topology does not create independence either (Sections~\ref{sec:mechanisms}--\ref{sec:topology}).
+\end{itemize}
+The state-centric framework of Section~\ref{sec:method} is the instrument with which these interventions are implemented and measured; we do not claim it as a contribution in itself.
+
+\begin{figure*}[!t]
+    \centering
+    \resizebox{\textwidth}{!}{\input{figures/fig_concept.tex}}
+    \caption{Message-based coordination (a) versus the state-centric coordination studied here (b). In (b) each candidate solution is committed to a world model as an explicit state; the world model validates transitions, summarizes the state for reviewers, estimates a trajectory risk, and can gate acceptance.}
+    \label{fig:concept}
+\end{figure*}
+
+\input{sec_related_acm.tex}
+\input{sec_method.tex}
+\input{sec_setup.tex}
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Does the Collective Correct Its Members?}
+\label{sec:agreement}
+
+Because the author's first draft is logged in every run, we can measure what the rest of the pipeline contributes within a run, as the change from draft accuracy to final accuracy, together with the first-round acceptance decision.
+Table~\ref{tab:gate} reports these quantities for the three reviewer-style configurations and all four backbones, pooled over the two independent runs (796 runs per row).
+
+\begin{table*}[!t]
+\caption{Within-run effect of each configuration (398 questions $\times$ 2 runs per row). Draft/Final: accuracy (\%) of the author's first draft and of the returned answer. W$\to$R / R$\to$W: share of runs (\%) whose answer changes from wrong to right / right to wrong. Pass: share (\%) of correct and of incorrect drafts accepted in the first round. Repaired: share (\%) of incorrect drafts not accepted in the first round that end correct (count of such drafts in parentheses).}
+\label{tab:gate}
+\small
+\setlength{\tabcolsep}{4.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{ll ccc cc cc c cc}
+\toprule
+ & & \multicolumn{3}{c}{Accuracy} & \multicolumn{2}{c}{Flips} & \multicolumn{2}{c}{Pass in round 1} & & & \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+Backbone & Configuration & Draft & Final & Net & W$\to$R & R$\to$W & Correct & Incorrect & Repaired & Rounds & Tokens \\
+\midrule
+\tabinput{tables/gate.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\paragraph{Without an external gate, review is close to a rubber stamp.}
+In the message-based reviewer pipeline, 80--97\% of incorrect drafts are accepted in the first round because the meta-reviewer judges them ``right''; the average number of review rounds is between 1.01 and 1.15, and the net change from draft to final accuracy is between \(+0.3\) and \(+1.9\) points (significant for GPT-4.1-nano only, \(p=0.009\)).
+The four-agent pipeline therefore returns, in the large majority of cases, the answer that a single call would have produced.
+The strongest backbone is the most extreme case: with GPT-4.1-mini 97\% of incorrect drafts pass, the reviewers almost never disagree with the author, and in 796 runs the pipeline changes four answers.
+
+\paragraph{Explicit state alone does not change this.}
+The peer-to-peer configuration adds explicit state tracking and validation on the author side and a state summary in every reviewer prompt, but leaves acceptance to the agents.
+Its statistics are those of the reviewer pipeline: 81--94\% of incorrect drafts pass, rounds average 1.01--1.12, and the net gain is \(+0.8\) to \(+1.3\) points, not significant in any case.
+
+\paragraph{How large is run-to-run variation?}
+Table~\ref{tab:repcons} reports the accuracy of each configuration in each of the two runs separately.
+The same configuration on the same 398 questions differs between runs by 1.9 points on average and by up to 4.0 points, because every call samples at temperature 1.0.
+This is the yardstick against which the remaining comparisons must be read: a single-run difference of a few points between two configurations carries no information, and we therefore base all conclusions on the pooled two-run comparisons.
+
+\begin{table}[!t]
+\caption{Accuracy (\%) of each configuration in the two independent runs (398 questions each), and the centralized$-$reviewer difference in each run.}
+\label{tab:repcons}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l ccc ccc cc}
+\toprule
+ & \multicolumn{3}{c}{Run 1} & \multicolumn{3}{c}{Run 2} & \multicolumn{2}{c}{Centr.\ $-$ Rev.} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-9}
+Backbone & Rev. & Peer & Centr. & Rev. & Peer & Centr. & Run 1 & Run 2 \\
+\midrule
+\tabinput{tables/rep_consistency.tex}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/correction_flow.pdf}
+\caption{Where collective correction succeeds and fails. Fate of incorrect (left) and correct (right) initial answers under the ungated reviewer pipeline and the centralized gate, for each backbone (both runs pooled). An incorrect draft is either accepted at once (false consensus), challenged but not repaired, or challenged and repaired; a correct draft is accepted, challenged but kept, or lost.}
+\label{fig:flow}
+\end{figure*}
+
+Fig.~\ref{fig:flow} shows the same data as a flow.
+Under the ungated pipeline the left panel is almost entirely ``false consensus'': the reviewers and the meta-reviewer confirm the incorrect draft, and the few drafts that are challenged are repaired about half of the time.
+These numbers are the central empirical fact of the paper: a reviewer-style LLM collective whose members share a backbone and read the author's draft behaves, to a first approximation, as a single agent.
+We read the rest of the results through a three-stage decomposition of what such a collective would have to do to correct a member: \emph{detect} that a draft may be wrong, \emph{challenge} it (withhold acceptance and send it back), and \emph{repair} it (produce a correct alternative).
+In the ungated pipeline the collective fails at the first stage.
+
+\subsection{Interventions: Detect, Challenge, Repair}
+\label{sec:mechanisms}
+
+\subsubsection{Centralized world-model gating}
+\label{sec:main_results}
+
+In the centralized configuration a candidate is accepted only if the world model's state-level test (Section~\ref{sec:gate}) is satisfied, whatever the meta-reviewer says.
+This moves the \emph{detect} and \emph{challenge} stages out of the agents' hands; the \emph{repair} stage remains with the author.
+Table~\ref{tab:main_results} reports per-benchmark accuracy for all configurations and Table~\ref{tab:pooled} the pooled paired comparisons.
+
+\begin{table*}[!t]
+\caption{Accuracy (\%) of the three reviewer-style configurations on identical questions (50 per benchmark, 48 for CIAR), averaged over two independent runs. Rev.: message-based reviewer pipeline. Bold: best per backbone and benchmark. The last row is the macro-average over benchmarks.}
+\label{tab:main_results}
+\small
+\setlength{\tabcolsep}{3.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l ccc ccc ccc ccc}
+\toprule
+ & \multicolumn{3}{c}{GPT-3.5-Turbo} & \multicolumn{3}{c}{GPT-4o-mini} & \multicolumn{3}{c}{GPT-4.1-nano} & \multicolumn{3}{c}{GPT-4.1-mini} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}
+Benchmark & Rev. & Peer & Centr. & Rev. & Peer & Centr. & Rev. & Peer & Centr. & Rev. & Peer & Centr. \\
+\midrule
+\tabinput{tables/main_results.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\caption{Pooled paired comparisons over all questions (per-question accuracy averaged over the two runs). Differences are in accuracy points with 95\% bootstrap confidence intervals; $p$: two-sided paired permutation test.}
+\label{tab:pooled}
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l c ccc cc cc cc}
+\toprule
+ & & \multicolumn{3}{c}{Accuracy (\%)} & \multicolumn{2}{c}{Peer $-$ Rev.} & \multicolumn{2}{c}{Centr. $-$ Rev.} & \multicolumn{2}{c}{Centr. $-$ Peer} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}\cmidrule(lr){10-11}
+Backbone & $n$ & Rev. & Peer & Centr. & $\Delta$ [95\% CI] & $p$ & $\Delta$ [95\% CI] & $p$ & $\Delta$ [95\% CI] & $p$ \\
+\midrule
+\tabinput{tables/pooled.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\paragraph{The gate intervenes, but with little discrimination.}
+With the three more recent backbones the gate reduces the first-round acceptance of incorrect drafts to 15--21\% (Table~\ref{tab:gate}).
+It does so mainly by being strict rather than selective: it also withholds acceptance from 55--60\% of \emph{correct} drafts, and thus roughly doubles the number of review rounds for correct and incorrect drafts alike.
+With GPT-3.5-Turbo the same gate, with the same thresholds, is lenient instead (80\% of correct and 63\% of incorrect drafts pass): a gate built on reviewer confidence and review wording does not transfer across backbones without recalibration.
+
+\paragraph{Detection is not correction.}
+The gate thus has some detection capability (it intercepts 79--85\% of incorrect drafts on the three more recent backbones, right panel of Fig.~\ref{fig:flow}) but poor specificity (it also intercepts 55--60\% of correct ones), and the repair stage is where the intervention fails.
+Of the incorrect drafts that the gate sends back, only 7\% (GPT-4.1-mini) to 23\% (GPT-4o-mini) end with a correct answer, and some initially correct answers are lost on the way (0.8--3.3\% of runs).
+The net within-run gain of the centralized configuration is \(0.0\), \(+1.8\), \(+1.4\), and \(+0.4\) points for the four backbones, not significant in any case, and no larger than the gain of the ungated reviewer pipeline on the same backbone (\(+1.4\), \(+1.3\), \(+1.9\), \(+0.3\)).
+The pooled paired differences to the reviewer pipeline (Table~\ref{tab:pooled}) are \(-0.5\), \(+0.8\), \(+1.8\), and \(-0.5\) points, all with confidence intervals that include zero, and \(+0.4\) points overall (\(p=0.58\)).
+
+\paragraph{A cautionary tale about single runs.}
+In the first run alone, the centralized configuration with GPT-4o-mini gained \(+4.3\) points over its drafts (\(p=0.012\)) and \(+4.0\) points over the reviewer pipeline (\(p=0.033\)), was at least as accurate as the pipeline on all eight benchmarks, and would have been reported as a clear positive result.
+In the second run it \emph{lost} \(0.8\) points against its drafts and \(2.5\) points against the pipeline (Table~\ref{tab:repcons}).
+Neither run is anomalous; both lie within the run-to-run variation of Table~\ref{tab:repcons}.
+We report this explicitly because the earlier version of this study, based on single runs, drew conclusions of exactly this kind.
+
+\paragraph{Cost.}
+Table~\ref{tab:efficiency} shows that the peer configuration costs about as much as the reviewer pipeline, whereas the centralized configuration uses \(1.7\times\) (GPT-3.5-Turbo) to \(4.3\times\) (GPT-4.1-mini) the tokens and roughly twice the LLM calls, because the gate triggers additional review rounds; the overhead grows with task difficulty.
+
+\begin{table}[!t]
+\caption{Cost per question with GPT-4o-mini: tokens, LLM calls, and wall-clock time (s, measured under concurrent execution). R: reviewer pipeline, P: peer, C: centralized.}
+\label{tab:efficiency}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l rrr rrr rrr}
+\toprule
+ & \multicolumn{3}{c}{Tokens} & \multicolumn{3}{c}{Calls} & \multicolumn{3}{c}{Time} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+Benchmark & R & P & C & R & P & C & R & P & C \\
+\midrule
+\tabinput{tables/efficiency.tex}
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\input{sec_ablation.tex}
+\input{sec_pilot.tex}
+\input{sec_independence.tex}
+\input{sec_combined.tex}
+
+\subsection{Falsified Hypotheses: Topology and Uncertainty}
+\label{sec:topology}
+
+An earlier version of this study, based on single runs and on comparisons that were not paired, hypothesized that decentralized peer coordination would benefit uncertain tasks, that centralized coordination would benefit structured ones, and that the CUI could predict the preferred regime.
+We report the test of these hypotheses in full because their failure is informative: across 32 backbone--benchmark combinations and two runs we find no reliable evidence for either.
+
+\paragraph{Peer versus centralized.}
+None of the 32 backbone--benchmark combinations shows a significant difference between the peer and the centralized configuration (smallest \(p=0.19\), uncorrected), and for almost every benchmark the sign of the gap changes from one backbone to the next (on GSM8K it is \(+3\), \(+1\), \(-4\), and \(+2\) points for the four backbones).
+In particular, the data do not support a regime in which centralized coordination wins on structured arithmetic benchmarks and peer coordination on ambiguous ones.
+
+\paragraph{The CUI does not select the mode.}
+\label{sec:cui_results}
+We test the hypothesis of Eq.~\eqref{eq:policy} that datasets with low CUI favor centralized and datasets with high CUI favor peer coordination.
+Table~\ref{tab:cui} lists the CUI of every benchmark (computed from that backbone's peer-mode logs) and the gap \(\Delta = \mathrm{Acc}_{\mathrm{peer}} - \mathrm{Acc}_{\mathrm{centralized}}\); Fig.~\ref{fig:cui_regime} plots them.
+No correlation is significant: Spearman \(\rho=+0.66\) (\(p=0.08\)) with GPT-3.5-Turbo, \(-0.12\) with GPT-4o-mini, \(+0.28\) with GPT-4.1-nano, and \(+0.20\) with GPT-4.1-mini.
+In the first run alone the picture had looked different (\(\rho=+0.74\), \(p=0.036\), with GPT-4.1-mini and \(\rho=-0.58\) with GPT-4o-mini); with the gaps averaged over two runs both associations shrink towards zero.
+With eight benchmarks per backbone and gaps that are individually not significant, these correlations give no support for a regime rule.
+
+\begin{table}[!t]
+\caption{CUI and peer$-$centralized accuracy gap $\Delta$ (points) per benchmark, and their correlation across the eight benchmarks.}
+\label{tab:cui}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l cc cc cc cc}
+\toprule
+ & \multicolumn{2}{c}{3.5-Turbo} & \multicolumn{2}{c}{4o-mini} & \multicolumn{2}{c}{4.1-nano} & \multicolumn{2}{c}{4.1-mini} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+Benchmark & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ \\
+\midrule
+\tabinput{tables/cui_compact.tex}
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/cui_scatter.pdf}
+\caption{CUI versus the peer$-$centralized accuracy gap. Each point is a benchmark. The sign and strength of the association differ across backbones.}
+\label{fig:cui_regime}
+\end{figure*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/threshold_sensitivity.pdf}
+\caption{Sensitivity of the CUI-adaptive policy to the threshold $\tau$ (macro-averaged accuracy over the eight benchmarks).}
+\label{fig:threshold}
+\end{figure*}
+
+\paragraph{Threshold sensitivity and held-out evaluation.}
+Fig.~\ref{fig:threshold} varies the threshold \(\tau\) of Eq.~\eqref{eq:policy} over its whole range.
+The best in-sample threshold improves on the better fixed mode by at most 0.4 points on any backbone, and its location differs across backbones (\([0.38,0.52]\), ``always peer'', \([0.72,0.82]\), \([0.28,0.36]\)).
+The per-benchmark oracle is only 0.5--1.0 points above the better fixed mode, so there is little to gain from mode selection even with perfect information.
+Out of sample---CUI computed on half of each benchmark's questions, \(\tau\) chosen on the other seven benchmarks, the selected mode scored on the held-out half---the adaptive policy reaches 56.4\%, 75.1\%, 72.8\%, and 82.7\% on the four backbones against 57.2\%, 75.8\%, 74.1\%, and 83.2\% for the better fixed mode: it is worse on all four.
+At the level of single tasks and of batches of 5--20 tasks (Table~\ref{tab:fine}), a logistic model predicting ``peer better than centralized'' from the CUI has a benchmark-grouped cross-validated AUC between 0.12 and 0.85 with no consistent trend.
+The CUI is a descriptive statistic of reviewer disagreement, not a usable selector.
+
+\paragraph{Why topology does not help.}
+The negative result is consistent with the main finding.
+Switching from a central state store to local replicas changes who holds the state and who decides, but not what the members are: the same model, in the same context, exposed to the same candidate answer.
+A change of communication topology does not create independence, and without independence the collective has nothing new to aggregate.
+
+\begin{table}[!t]
+\caption{Predicting ``peer better than centralized'' from the CUI at task and batch level. $R^2$: linear fit of the accuracy gap. AUC: in-sample. CV: cross-validation grouped by benchmark.}
+\label{tab:fine}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{llccccc}
+\toprule
+Backbone & Batch & $n$ & $R^2$ & AUC & CV Acc. & CV AUC \\
+\midrule
+\tabinput{tables/fine_grained.tex}
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Comparison With External Methods}
+\label{sec:baseline_results}
+
+\begin{table*}[!t]
+\caption{Accuracy (\%) of external baselines and reviewer-style configurations under identical conditions. Tokens: average per question. Bold: best per column and backbone.}
+\label{tab:baselines}
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l cccccccc c r}
+\toprule
+Method & GSM8K & SVAMP & GSM-Hard & MMLU-El. & CIAR & StrategyQA & MMLU-Mor. & MMLU-Law & Avg. & Tokens \\
+\midrule
+\multicolumn{11}{l}{\emph{GPT-4.1-mini}} \\
+\tabinput{tables/baselines_gpt-4.1-mini.tex}
+\midrule
+\multicolumn{11}{l}{\emph{GPT-4.1-nano}} \\
+\tabinput{tables/baselines_gpt-4.1-nano.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+Table~\ref{tab:baselines} compares the reviewer-style configurations with six external methods on two backbones.
+Apart from MAD, which is clearly weaker, all methods lie within 3.5 points of each other in macro-averaged accuracy on each backbone, and most of these differences are within sampling error.
+A single chain-of-thought call is a strong member of the comparison: the best multi-agent method exceeds it by 1.2 points on GPT-4.1-mini (Multi-Agent Debate) and 2.0 points on GPT-4.1-nano (centralized) while using 10 to 40 times as many tokens.
+The centralized configuration has no stable rank: first on GPT-4.1-nano, second-to-last on GPT-4.1-mini, most expensive on both.
+We therefore do not claim that world-model--guided coordination outperforms existing multi-agent methods; the observation we take from this table is that none of these collectives, whatever its communication pattern, adds much to what one of its members can do alone.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{The independence condition is violated, and the data show how.}
+Three measurements locate the problem.
+Reviewers that share the author's backbone and see its draft confirm it: 80--97\% of incorrect drafts pass an ungated meta-review.
+When the acceptance decision is forced open, the author is asked to reconsider but usually returns the same answer: 77--93\% of blocked errors remain errors.
+When the acceptance test is agreement among reviewer answers (Section~\ref{sec:pilot}), both reviewers reproduce the author's wrong answer in 80\% of the author's failures; when the reviewers are not shown the draft, this falls to 48--61\%, and when they are given a different backbone but still shown the draft, it stays at 84\% (Section~\ref{sec:independence}).
+These are the signatures of correlated errors and informational cascades in the collective-intelligence literature~\cite{ladha1992condorcet,bikhchandani1992cascades,lorenz2011social}, now measured in a collective whose members are literally the same model.
+That the effect is strongest for the most capable backbone is consistent with the self-correction and sycophancy findings for single models~\cite{huang2024cannot,sharma2024sycophancy}: a stronger model is also a stronger advocate of its first answer.
+
+\paragraph{What an explicit shared state buys, and what it does not.}
+Representing the reasoning state explicitly---storing candidates, validating transitions, showing reviewers a state summary---has no measurable effect by itself: the peer configuration, which does all of this, behaves like the message-based pipeline.
+What changes \emph{behaviour} is an independent signal that reaches the deciding agent and, at a price, a gate that can overrule it; what does not change, on any backbone, is accuracy.
+The useful part of the ``world model'' in our framework is therefore its role as an independent arbiter, not its role as a store---and the arbiter we built is not good enough to turn forced reconsideration into corrections.
+
+\paragraph{Design implications.}
+The results suggest two complementary interventions rather than one: independent evidence generation (reviewers that never see the candidate answer) and selective external oversight (an acceptance rule that does not itself re-anchor on the candidate and that carries the independent solutions into repair).
+The ablation and the exploratory variants agree on two further points.
+First, the economical part of the design is to make an independent signal \emph{visible} to the agent that decides, which already lowers the first-round acceptance of incorrect drafts at a third of the cost of gating; forcing additional rounds is the expensive part and, in our data, buys no accuracy.
+Second, any acceptance test based on agreement is bounded by the independence of the solvers, and Section~\ref{sec:independence} shows what independence requires in practice: not a different model, but no exposure to the candidate answer. Instructing a reviewer to ``solve first'' is not enough; the draft must be withheld---and, as Section~\ref{sec:combined} shows, withheld from the aggregating judge as well, or the dependence returns at the next stage.
+The remaining, un-reproducible errors call for genuinely different solvers (other model families, tools, or humans), which is the design principle of ReConcile~\cite{chen2024reconcile} and of diverse human crowds~\cite{hong2004groups}; and revision prompts that confront the author with concrete alternative solutions, rather than with a verdict, raise the repair rate.
+More generally, we suggest that multi-agent reasoning systems be reported with the statistics of Table~\ref{tab:gate}---first-round acceptance of correct and of incorrect drafts, catch and loss rates, and repair rate---which are cheap to collect and reveal whether a collective is doing anything that its members would not do alone.
+
+\paragraph{Three design principles.}
+The interventions of Sections~\ref{sec:independence}--\ref{sec:combined} can be summarized as three principles for collectives of LLM agents, each tied to a failure we measured.
+\emph{Principle 1: independence must precede judgment.} Asking a reviewer to ``solve the problem first'' while showing it the candidate answer does not produce an independent judgment (80--84\% error reproduction); withholding the candidate does (42--61\%).
+\emph{Principle 2: independence must survive aggregation.} Independent reviewers are of little use if the agent that aggregates their judgments has itself read the candidate: in our data such a judge discarded two thirds of reviewer disagreement, right or wrong, and withholding the candidate from the judge restored most of it (retention 32\% to 60\%).
+\emph{Principle 3: independent evidence must survive into repair.} Telling the author that its answer may be wrong is not enough (5 of 27 repairs under the risk-based gate); passing on the alternative solutions that produced the disagreement is what repairs errors (repair rates roughly double when the solutions are attached, in both the ungated and the gated chain).
+Together they prescribe a pipeline---generate independently, aggregate independently, preserve the evidence, repair---whose every step corresponds to a bottleneck observed in Fig.~\ref{fig:flow} and Tables~\ref{tab:independence}--\ref{tab:combined}.
+
+\paragraph{A methodological message.}
+In our setting, the same configuration evaluated twice on the same 398 questions differed by 1.9 points on average and by up to 4 points (Table~\ref{tab:repcons}), and a single-run effect of 4.3 points with \(p=0.01\) did not reproduce.
+We do not propose this as a universal threshold; it is the empirical run-to-run variation of one pipeline at temperature 1.0 with 50 questions per benchmark.
+But it implies that, in studies of this size, differences between multi-agent configurations of a few points should not be interpreted without replication and paired testing, and it explains why several improvements reported in the earlier version of this work, and plausibly elsewhere, were not real.
+
+\paragraph{Limitations.}
+(i) Each benchmark contributes at most 50 questions, so only pooled effects of a few points can be detected; per-benchmark conclusions should not be drawn from Table~\ref{tab:main_results}.
+(ii) The reviewer-style configurations were run twice and the external baselines, ablations, and exploratory variant once, all at temperature 1.0; Table~\ref{tab:repcons} shows that single-run differences of up to four points arise from sampling alone, so the single-run comparisons of Sections~\ref{sec:ablation}, \ref{sec:pilot}, \ref{sec:independence}, \ref{sec:combined}, and \ref{sec:baseline_results} should be read as evidence about behaviour and cost rather than as accuracy rankings.
+(iii) All backbones are small models from one provider; the trend across them (less correction for the stronger model) may or may not extend to frontier models.
+(iv) The world model is rule-based and its constants were chosen by hand; a learned risk estimator could behave differently.
+(v) Answers are extracted with the scoring script of the underlying pipeline~\cite{wang2025mars}, which can mis-parse numbers written with thousands separators; this affects all methods alike but lowers absolute accuracy on GSM-Hard.
+(vi) The benchmarks are abstract reasoning tasks with a single correct answer; collectives that deliberate about open-ended or evaluative questions may behave differently.
+
+\section{Conclusion}
+
+We asked whether a reviewer-style collective of LLM agents corrects its members, and found that, without an external acceptance mechanism, it almost never does: its members agree with the author's first draft whether it is right or wrong, most of all when the backbone is strong.
+A centralized world model that gates acceptance can force the collective to reconsider, but the gate separates correct from incorrect drafts poorly, the author seldom repairs what is sent back, the net accuracy gain over two runs is nil on every backbone, and the cost is up to four times that of the ungated pipeline; a gain that appeared on one backbone in a single run did not survive a second.
+Decentralized state replicas, and an uncertainty index meant to choose between the two, make no measurable difference.
+An ablation and an exploratory agreement-based gate locate the economical ingredient in the visibility of an independent signal to the deciding agent, and the remaining obstacle in the correlated errors of agents that share a model and read each other's output; a direct test, replicated, shows that withholding the draft from the reviewers substantially reduces the reproduction of errors, whereas changing the reviewers' backbone does not, and that a draft-exposed meta-reviewer undoes much of the gain at the aggregation stage.
+The binding constraint on these collectives is independence, as the classical theory of collective intelligence would predict, and the cheapest way to obtain some of it is to stop showing the members each other's answers; we propose that future multi-agent reasoning systems be evaluated on how much they actually change, not only on how accurate they end up.
+
+\begin{acks}
+Generative AI tools were used in the preparation of this manuscript for language editing, for assistance with experiment and analysis code, and for producing the source code of the diagrams in Figs.~\ref{fig:concept}--\ref{fig:peer}, which are vector drawings typeset from that code. The authors reviewed all content and take full responsibility for it.
+\end{acks}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

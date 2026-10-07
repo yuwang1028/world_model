@@ -1,0 +1,228 @@
+\section{Problem Formulation}
+\label{sec:problem_formulation}
+
+We consider a multi-agent reasoning system built on large language models (LLMs).
+Given an input query \(x\), the objective is to produce a correct final answer \(y\) through a bounded number of interaction rounds among an author agent, \(k\) reviewer agents, and a meta-reviewer agent.
+
+Existing multi-agent LLM frameworks typically represent the reasoning process implicitly, as a sequence of natural-language messages exchanged among agents~\cite{du2024improving,qian2024chatdev,hong2024metagpt,wang2025mars}.
+Such message-based representations do not expose an explicit object that records which candidate solution is currently under consideration, how it was derived, and how reliable it is judged to be.
+We therefore formulate multi-agent reasoning as a \emph{state-transition process} over an abstract task environment, inspired by world-model approaches to sequential decision making~\cite{ha2018recurrent,hafner2020dream}.
+
+\paragraph{States, actions, transitions.}
+Let \(s_t \in \mathcal{S}\) denote the task state after the \(t\)-th committed action, with \(s_0\) derived from the query \(x\).
+An action \(a_t \in \mathcal{A}\) is a typed proposal produced by an agent (a draft or a revision of a candidate solution).
+Committing an action yields a new state through a transition function
+\begin{equation}
+s_{t+1} = T(s_t, a_t, o_t),
+\end{equation}
+where \(o_t\) is an optional observation (in our setting, the index of the review round).
+A reasoning \emph{trajectory} is the sequence \(\xi = (s_0, s_1, \ldots, s_H)\) with horizon \(H\).
+
+\paragraph{Validation and risk.}
+Two evaluation functions operate on states. A validator
+\begin{equation}
+V(s_t, a_t) \rightarrow (\mathit{ok}, \mathit{hint})
+\end{equation}
+decides whether a proposed action may be passed on to the reviewers, and a rollout function
+\begin{equation}
+R(s_t, \mathcal{F}_t) \rightarrow r_t \in [0,1]
+\end{equation}
+maps the current state and the reviewer feedback \(\mathcal{F}_t\) collected for it to a \emph{trajectory risk}: an estimate of how likely it is that accepting the current candidate would be a mistake.
+
+\paragraph{Coordination as a policy.}
+A coordination mechanism \(\pi\) specifies who owns the state, which information each agent sees, and under which condition a candidate is accepted.
+We study two mechanisms (centralized and peer-to-peer, Section~\ref{sec:method}) and an uncertainty-dependent rule for choosing between them: for a task distribution \(D\) with coordination uncertainty \(U(D)\),
+\begin{equation}
+\label{eq:policy}
+\pi^{*}(D) =
+\begin{cases}
+\text{Centralized}, & U(D) < \tau,\\
+\text{Peer}, & U(D) \ge \tau,
+\end{cases}
+\end{equation}
+where \(\tau\) is a threshold.
+Eq.~\eqref{eq:policy} is a hypothesis to be tested empirically, not an optimality result; Section~\ref{sec:cui} defines \(U(D)\) and Section~\ref{sec:cui_results} examines how well the rule holds.
+
+\section{World-Model--Guided Coordination}
+\label{sec:method}
+
+Our framework consists of (i) a world model that stores and evaluates reasoning states, (ii) LLM agents in three roles, and (iii) a coordination mechanism that determines how the agents use the world model.
+This section specifies each component at the level of detail needed to re-implement it.
+The world model is deliberately lightweight: it is a symbolic state store with rule-based evaluation functions and involves no additional LLM calls and no learned parameters.
+
+\subsection{World-Model State and Operations}
+\label{sec:wm}
+
+\subsubsection{State composition}
+The world model maintains a rooted tree of state nodes. Each node is a tuple
+\begin{equation}
+s = \langle \mathit{id},\ \mathit{parent},\ a,\ o \rangle ,
+\end{equation}
+where \(\mathit{id}\) is a unique pointer, \(\mathit{parent}\) is the pointer of the preceding state (empty for \(s_0\)), \(a = \langle \mathit{type}, \mathit{content}, \mathit{meta} \rangle\) is the action that produced the state, and \(o\) is the observation attached to it.
+The action type is one of \textsc{init} (the query), \textsc{draft} (the author's first candidate), \textsc{revision} (a candidate revised after meta-review feedback, whose \(\mathit{meta}\) field stores that feedback), and \textsc{revalidated} (a candidate re-submitted after a failed validation).
+The \(\mathit{content}\) field holds the full text of the candidate solution, including its reasoning steps and final answer.
+The path from the root to the current node is therefore a complete, ordered record of every candidate that has been considered for the query and of the feedback that triggered each revision.
+Agents never exchange this structure itself; they hold the pointer of the current node and query the world model through the four operations below.
+
+\subsubsection{Transition \(T\)}
+\(T(s_t, a_t, o_t)\) allocates a new node whose parent is \(s_t\), stores \(a_t\) and \(o_t\) in it, and returns its pointer. States are immutable once created, so a revision never overwrites the candidate it replaces.
+
+\subsubsection{Validation \(V\)}
+\(V(s_t, a_t)\) applies two rule-based checks to the content of a proposed action:
+(i) a completeness check, which rejects contents shorter than 10 characters; and
+(ii) a degenerate-result check, which rejects contents that match a small lexicon \(\mathcal{E}\) of failure indicators (a final expression that evaluates to zero, or the tokens ``undefined'', ``infinity'', and ``cannot'').
+If a check fails, the validator returns \(\mathit{ok}=0\) together with a textual hint; the author is then asked once to re-check and re-submit the candidate in the required format, and the re-submitted candidate is committed as a \textsc{revalidated} state.
+The implementation also contains an optional table of per-pattern outcome statistics that can be updated from past results. We disable it in all experiments: every query starts from an empty world model, so no ground-truth information from other test questions can influence a run.
+
+\subsubsection{State summary \(\sigma\)}
+\(\sigma(s_t)\) renders the current state for consumption by other agents. It returns the content of the latest action truncated to 800 characters.
+In centralized mode, a state whose content matches \(\mathcal{E}\) is not forwarded verbatim; \(\sigma\) instead returns a short warning that the previous step has potential issues.
+The summary is appended to each reviewer prompt in a dedicated \texttt{[WORLD\_STATE]} block.
+
+\subsubsection{Rollout risk \(R\)}
+Let \(\mathcal{F}_t=\{f_1,\ldots,f_k\}\) be the reviews of the current candidate in review round \(n\in\{1,2,\ldots\}\).
+Each review \(f_i\) carries a reliability score \(c_i\in[0,1]\), computed as the exponential of the mean token log-probability of the reviewer's response, and a polarity \(u_i\in\{+1,0,-1\}\), obtained by comparing the number of matches against a positive lexicon (e.g., ``correct'', ``accurate'', ``agree'') and a negative lexicon (e.g., ``incorrect'', ``error'', ``mistake'').
+Let \(\rho = \tfrac{1}{k}\sum_i \mathbb{1}[u_i=+1]\) be the fraction of positive reviews and \(\bar c = \tfrac1k \sum_i c_i\) the mean reliability.
+The trajectory risk is
+\begin{equation}
+\label{eq:risk}
+r_t = \mathrm{clip}_{[0,1]}\Big( b(n,\delta_t) + 0.3\,e_t + 0.25\,(1-\rho) + g(\rho) + h(\bar c) \Big),
+\end{equation}
+where \(\delta_t\) is the depth of \(s_t\) in the state tree, \(e_t=\mathbb{1}[\mathit{content}(s_t)\text{ matches }\mathcal{E}]\), and
+\begin{align*}
+b(n,\delta) &= \begin{cases} 0.30, & n = 1,\\ 0.20 + 0.01\,\delta, & n \ge 2, \end{cases}\\
+g(\rho) &= \begin{cases} +0.10, & \rho < 0.5,\\ +0.05, & 0.5 \le \rho < 0.7,\\ +0.02, & 0.7 \le \rho < 1,\\ -0.10, & \rho = 1, \end{cases}\\
+h(\bar c) &= \begin{cases} +0.20, & \bar c < 0.6,\\ +0.10, & 0.6 \le \bar c < 0.7,\\ -0.05, & 0.7 \le \bar c \le 0.85,\\ -0.15, & \bar c > 0.85. \end{cases}
+\end{align*}
+The risk thus rises with reviewer disagreement, low reviewer reliability, and degenerate content, and its base level depends on how far the trajectory has progressed.
+The constants in Eq.~\eqref{eq:risk} were set manually during development and are kept fixed across all datasets and backbones.
+
+\subsection{Agent Roles}
+
+\paragraph{Author} The author generates a candidate solution in a fixed ``Thoughts / Answer'' format and revises it when feedback is returned.
+
+\paragraph{Reviewers} Each of the \(k\) reviewers first solves the problem independently, then compares its result with the author's candidate and returns a decision (right/wrong), a justification, and its own final answer. Reviewers do not see each other's reviews. When a world model is used, the reviewer prompt additionally contains the state summary \(\sigma(s_t)\).
+
+\paragraph{Meta-reviewer} The meta-reviewer receives the candidate, all reviews with their reliability scores, and (when a world model is used) the risk estimate \(r_t\). It returns a decision (right/wrong), a justification, and suggestions for revision.
+
+\subsection{Coordination Architectures}
+
+\subsubsection{Centralized coordination}
+In the centralized architecture (Fig.~\ref{fig:centralized}) a single world-model instance is the only holder of the reasoning state.
+The author submits each candidate to it as an action; the world model validates the action, commits the transition, and hands the summary \(\sigma(s_t)\) to every reviewer, so all reviewers evaluate exactly the same committed state.
+After the reviews are collected, the world model computes \(r_t\) with Eq.~\eqref{eq:risk}, passes it to the meta-reviewer, and finally applies the acceptance gate of Section~\ref{sec:gate}.
+A candidate can therefore only be returned as the final answer if the world model agrees; a positive meta-review alone is not sufficient.
+
+\begin{figure*}[!t]
+    \centering
+    \resizebox{0.95\textwidth}{!}{\input{figures/fig_centralized.tex}}
+    \caption{Centralized world-model coordination. All agents read from and write to one shared state store; the world model validates each action, distributes the state summary, computes the trajectory risk from the reviews, and gates acceptance.}
+    \label{fig:centralized}
+\end{figure*}
+
+\subsubsection{Peer-to-peer coordination}
+In the peer architecture (Fig.~\ref{fig:peer}) there is no shared state store. Every agent owns a local world-model instance.
+The author commits and validates its candidates in its local instance and sends the resulting summary to the reviewers as part of its message; each reviewer and the meta-reviewer mirror the received information into their own local instances.
+The meta-reviewer's local world model has no access to a shared review record and therefore computes only a local risk (Eq.~\eqref{eq:risk} without the review-dependent terms, with base level 0.5), which is reported in the meta-reviewer prompt.
+There is no global gate: a candidate is accepted as soon as the meta-reviewer decides ``right''.
+Peer coordination is thus the lighter mechanism. It keeps explicit state tracking and validation on the author side but leaves the acceptance decision to the agents, whereas centralized coordination adds a conservative, state-level check that can overrule them.
+
+\begin{figure*}[!t]
+    \centering
+    \resizebox{0.95\textwidth}{!}{\input{figures/fig_peer.tex}}
+    \caption{Peer-to-peer world-model coordination. Each agent keeps a local world-model replica; state summaries travel inside messages, and acceptance follows the meta-reviewer's decision.}
+    \label{fig:peer}
+\end{figure*}
+
+\subsection{World-Model--Guided Acceptance}
+\label{sec:gate}
+
+In centralized mode a candidate that the meta-reviewer judges ``right'' is accepted only if it also passes the following gate.
+Let \(\kappa\) be the number of reviewers counted as agreeing with the candidate (a reviewer agrees if its review has positive polarity or its reliability exceeds 0.7).
+The risk is first adjusted by lexical cues in the meta-review, \(r'_t = \mathrm{clip}_{[0,1]}(r_t + \Delta_{\mathrm{meta}})\), where \(\Delta_{\mathrm{meta}}\in[-0.15,+0.25]\) is positive when the meta-review mentions flaws or concerns and negative when it states that the answer is clearly correct.
+The \emph{effective risk} combines the adjusted risk with reviewer reliability,
+\begin{equation}
+\tilde r_t = 0.7\, r'_t + 0.3\,(1-\bar c),
+\end{equation}
+and is compared with a length-aware threshold \(\theta = \theta_0 + \min(0.12,\ L/900)\), where \(L\) is the number of words in the candidate.
+The candidate is accepted if either
+\begin{align}
+&\tilde r_t \le \theta \ \wedge\ \kappa \ge \kappa_{\min} \ \wedge\ \bar c > c_{\min}, \quad\text{or} \label{eq:gateA}\\
+&\kappa = k \ \wedge\ \bar c > c_{\mathrm{full}} \ \wedge\ \tilde r_t \le r_{\mathrm{cap}}. \label{eq:gateB}
+\end{align}
+Otherwise the meta-review is returned to the author as feedback, the author revises, and the revision is committed as a new state.
+Table~\ref{tab:hyper} lists the gate hyperparameters. They are defined per answer format rather than per dataset and were fixed before the experiments reported in this paper.
+
+\begin{table}[!t]
+\caption{Acceptance-gate hyperparameters (centralized mode)}
+\label{tab:hyper}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+Task family & $\theta_0$ & $\kappa_{\min}$ & $c_{\min}$ & $c_{\mathrm{full}}$ & $r_{\mathrm{cap}}$ \\
+\midrule
+\makecell[l]{GSM8K, SVAMP,\\GSM-Hard, StrategyQA} & 0.28 & 2 & 0.65 & 0.80 & 0.45 \\
+CIAR & 0.35 & 1 & 0.60 & 0.75 & 0.50 \\
+MMLU subsets & 0.38 & 1 & 0.58 & 0.72 & 0.52 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Overall Procedure}
+
+Algorithm~\ref{alg:wm-agent} summarizes one run. The same procedure covers both architectures; they differ in where the state lives and in the acceptance test of line~\ref{line:accept}.
+
+\begin{algorithm}[t]
+\caption{World-Model--Guided Multi-Agent Reasoning}
+\label{alg:wm-agent}
+\begin{algorithmic}[1]
+\REQUIRE Query \(x\), reviewers \(k\), maximum review rounds \(N\)
+\ENSURE Final answer \(y\)
+\STATE \(s \leftarrow T(\varnothing, \langle\textsc{init}, x\rangle)\)
+\STATE Author drafts candidate \(c\); \(a \leftarrow \langle\textsc{draft}, c\rangle\); \(s \leftarrow T(s, a)\)
+\IF{\(V(s,a)\) fails}
+    \STATE Author re-submits \(c\) given the validator hint; \(s \leftarrow T(s, \langle\textsc{revalidated}, c\rangle)\)
+\ENDIF
+\FOR{\(n = 1,\ldots,N\)}
+    \STATE Each reviewer evaluates \(c\) given \(\sigma(s)\) \(\rightarrow\) reviews \(\mathcal{F}\)
+    \STATE \(r \leftarrow R(s, \mathcal{F})\) \COMMENT{trajectory risk, Eq.~\eqref{eq:risk}}
+    \STATE Meta-reviewer decides \(d\in\{\text{right},\text{wrong}\}\) given \(c, \mathcal{F}, r\)
+    \IF{\(d=\text{right}\) \AND \textsc{Accept}\((r,\mathcal{F})\)} \label{line:accept}
+        \RETURN answer of \(c\)
+    \ENDIF
+    \IF{\(n<N\)}
+        \STATE Author revises \(c\) given the meta-review; \(a \leftarrow \langle\textsc{revision}, c\rangle\); \(s \leftarrow T(s,a,n)\)
+        \STATE Re-submit once if \(V(s,a)\) fails
+    \ENDIF
+\ENDFOR
+\RETURN answer of the last candidate \(c\)
+\end{algorithmic}
+\vspace{2pt}
+{\footnotesize \textsc{Accept} is Eqs.~\eqref{eq:gateA}--\eqref{eq:gateB} in centralized mode and always true in peer mode.}
+\end{algorithm}
+
+\subsection{Coordination Uncertainty Index}
+\label{sec:cui}
+
+To characterize when each architecture is preferable we define the \emph{Coordination Uncertainty Index} (CUI), a dataset-level statistic computed from the logs of the first review round.
+It is inspired by information-theoretic notions of uncertainty~\cite{shannon1948mathematical} and aggregates four signals of how hard it is for the agents to agree on a stable shared state.
+For a dataset \(D\) with \(N\) tasks:
+
+\begin{itemize}
+\item \textbf{Reviewer belief entropy.} Let \(p^{(i)}\) be the fraction of reviewers whose decision on task \(i\) is ``right''. Then
+\(H_{\mathrm{rev}} = \tfrac1N\sum_i \big[-p^{(i)}\log p^{(i)} - (1-p^{(i)})\log(1-p^{(i)})\big]\).
+\item \textbf{Confidence dispersion.} \(V_{\mathrm{conf}} = \tfrac1N\sum_i \mathrm{Var}(c^{(i)}_1,\ldots,c^{(i)}_k)\), the variance of the reviewers' reliability scores.
+\item \textbf{Risk instability.} \(V_{\mathrm{risk}} = \tfrac1N\sum_i \mathrm{Var}(r^{(i)}_1,\ldots,r^{(i)}_{n_i})\), the variance of the trajectory risk (Eq.~\eqref{eq:risk}) over the \(n_i\) review rounds of task \(i\) (zero for single-round tasks).
+\item \textbf{Answer entropy.} \(H_{\mathrm{ans}}\) is the mean Shannon entropy of the multiset of normalized final answers proposed for a task by the author, the reviewers, and the meta-reviewer.
+\end{itemize}
+
+Each component is min--max normalized over the pool of datasets under study (denoted by a hat), and the index is their unweighted mean:
+\begin{equation}
+\label{eq:cui}
+U(D) = \tfrac14\big(\hat H_{\mathrm{rev}} + \hat V_{\mathrm{conf}} + \hat V_{\mathrm{risk}} + \hat H_{\mathrm{ans}}\big).
+\end{equation}
+We use equal weights to avoid fitting additional free parameters on a small number of datasets.
+Because of the normalization, \(U(D)\) is a \emph{relative} index: it ranks the datasets of a pool by coordination uncertainty, and a threshold \(\tau\) is meaningful only with respect to that pool.
+Unless stated otherwise, the CUI is computed from peer-mode logs, which are the cheapest to obtain.

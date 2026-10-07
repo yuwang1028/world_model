@@ -1,0 +1,62 @@
+\section{Related Work}
+
+\paragraph{Multi-agent LLM reasoning.}
+A growing body of work improves LLM reasoning by letting several model instances critique one another.
+Multi-agent debate lets agents exchange and revise answers over several rounds~\cite{du2024improving}; MAD assigns opposing roles to two debaters and adds a judge that can end the debate~\cite{liang2024mad}; ReConcile runs a round-table discussion among diverse LLMs and aggregates their answers by confidence-weighted voting~\cite{chen2024reconcile}.
+Self-refinement and reflection methods apply the same critique--revise loop within a single model~\cite{madaan2023selfrefine,shinn2023reflexion}.
+Role-based systems such as ChatDev, MetaGPT, and AutoGen organize agents into specialized roles that collaborate through structured conversations~\cite{qian2024chatdev,hong2024metagpt,wu2024autogen}.
+Closest to our setting, MARS organizes agents as an author, independent reviewers, and a meta-reviewer, which removes reviewer-to-reviewer communication and thereby reduces the token cost of fully connected debate~\cite{wang2025mars}.
+Our framework adopts this reviewer-style role structure and uses it as the message-based baseline.
+
+\paragraph{Role specialization, workflow optimization, and graph-structured orchestration.}
+Recent systems go beyond fixed role assignments.
+AgentVerse dynamically recruits a group of expert agents for each task and alternates collaborative decision making with evaluation~\cite{chen2024agentverse}; DyLAN selects and re-weights agents during inference through an agent-importance score~\cite{liu2024dylan}.
+Role-specialized pipelines have also been shown to be effective beyond question answering: Zhao et al.\ combine multiple LLM agents with small models for zero-shot knowledge-graph question generation, assigning distinct sub-tasks to distinct agents~\cite{zhao2024kgqg}.
+A second line of work treats the communication structure itself as the object of optimization.
+MacNet arranges agents on directed acyclic graphs and studies how collaboration scales with topology~\cite{qian2025scaling}; GPTSwarm represents an agent system as a computational graph whose node prompts and edge connectivity are optimized~\cite{zhuge2024gptswarm}; AgentPrune removes redundant messages from the spatial--temporal communication graph to reduce cost~\cite{zhang2025agentprune}.
+These approaches decide \emph{who} talks to \emph{whom}.
+Our work is complementary: we keep the topology fixed and ask \emph{what} the agents coordinate through---an explicit, validated task state rather than the raw message stream---and whether the degree of centralization of that state should depend on task uncertainty.
+An uncertainty signal such as the CUI could in principle be used as an input to topology-selection methods.
+
+\paragraph{Memory-based agents.}
+Memory mechanisms also structure the context of LLM agents and are therefore closely related to our use of explicit state.
+Generative Agents store a stream of observations and retrieve from it by recency, relevance, and importance~\cite{park2023generative}; MemGPT pages information between the context window and external storage in the manner of an operating system~\cite{packer2023memgpt}; MemoryBank maintains and updates a long-term store with a forgetting mechanism~\cite{zhong2024memorybank}; Reflexion and Voyager accumulate verbal lessons and executable skills across episodes~\cite{shinn2023reflexion,wang2024voyager}; and CoALA provides a unifying taxonomy of working, episodic, semantic, and procedural memory for language agents~\cite{sumers2024coala}.
+In CoALA's terms, our state store is a structured \emph{working memory} for a single task, and we do not claim a new memory architecture.
+The difference lies in what the structure is used for.
+Memory systems answer the question ``which past information should be placed in the context?''; their central operations are write, retrieve, and summarize, and their goal is to preserve information across long horizons.
+The world model in our framework answers the question ``may this proposed step be committed, and may the current trajectory be accepted?''; its central operations are a typed transition, a validator that can reject an action before other agents see it, and a risk function over the trajectory that gates acceptance independently of any single agent's verdict.
+Our state is also not persistent: it is created per query and discarded afterwards, so none of the reported gains can come from cross-task memory.
+The two ideas are compatible, and combining a persistent memory with state-level validation is a natural extension.
+
+\paragraph{World models and structured reasoning.}
+World models were introduced in reinforcement learning to represent environment states and transitions and to plan by imagined rollouts~\cite{ha2018recurrent,hafner2020dream}.
+In the LLM literature, RAP uses the LLM itself as a world model that predicts the next reasoning state and plans with Monte-Carlo tree search~\cite{hao2023rap}, Tree-of-Thoughts evaluates and searches over partial solutions~\cite{yao2023tree}, and ReAct and Toolformer couple reasoning with environment or tool feedback~\cite{yao2023react,schick2023toolformer}.
+These methods structure the reasoning of a single agent.
+Our world model is far simpler than a learned dynamics model---it is a symbolic state store with rule-based validation and risk estimation---but it is shared across agents and used for coordination: it determines what reviewers see and when a candidate is accepted.
+
+\paragraph{Positioning.}
+Table~\ref{tab:related_work} summarizes the comparison.
+To our knowledge, prior multi-agent reasoning frameworks do not combine an explicit per-task state object, validation of state transitions, a trajectory-level acceptance test, and a task-dependent choice of coordination mechanism.
+The table also makes the limits of our framework explicit: it has neither persistent cross-task memory nor a learned communication topology.
+
+\begin{table*}[!t]
+\caption{Positioning Against Representative Approaches (\cmark: supported; \xmark: not supported; $\circ$: partially)}
+\label{tab:related_work}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lccccccc}
+\toprule
+ & \makecell{Debate / MAD\\\cite{du2024improving,liang2024mad}} & \makecell{ReConcile\\\cite{chen2024reconcile}} & \makecell{MARS\\\cite{wang2025mars}} & \makecell{AgentVerse\\\cite{chen2024agentverse}} & \makecell{GPTSwarm\\\cite{zhuge2024gptswarm}} & \makecell{Memory agents\\\cite{packer2023memgpt,zhong2024memorybank}} & Ours \\
+\midrule
+Multi-agent critique of candidate answers & \cmark & \cmark & \cmark & \cmark & \cmark & \xmark & \cmark \\
+Explicit per-task state object & \xmark & \xmark & \xmark & \xmark & \xmark & $\circ$ & \cmark \\
+Validation of state transitions & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+Acceptance independent of a single agent's verdict & $\circ$ & \cmark & \xmark & $\circ$ & $\circ$ & \xmark & \cmark \\
+Persistent cross-task memory & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark & \xmark \\
+Dynamic or optimized agent topology & \xmark & \xmark & \xmark & \cmark & \cmark & \xmark & \xmark \\
+Uncertainty-dependent coordination mode & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table*}

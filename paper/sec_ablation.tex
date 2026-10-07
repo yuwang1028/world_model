@@ -1,0 +1,34 @@
+\subsection{Ablation of World-Model Components}
+\label{sec:ablation}
+
+To see which component of the centralized configuration is responsible for its behaviour we remove them one at a time with GPT-4o-mini (Table~\ref{tab:ablation}).
+Each variant is run once on the same 398 questions; for comparability the table shows the \emph{first} run of the two reference configurations, which were run in the same batch.
+
+\begin{table*}[!t]
+\caption{Ablation with GPT-4o-mini (398 questions per row, single run). Columns as in Table~\ref{tab:gate}; $\Delta$ Full: paired difference in final accuracy to the full centralized configuration in the same run (points, $p$ of the paired permutation test in parentheses).}
+\label{tab:ablation}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l ccc cc cc c cc c}
+\toprule
+ & \multicolumn{3}{c}{Accuracy} & \multicolumn{2}{c}{Flips} & \multicolumn{2}{c}{Pass in round 1} & & & & \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+Configuration & Draft & Final & Net & W$\to$R & R$\to$W & Correct & Incorrect & Repaired & Rounds & Tokens & $\Delta$ Full \\
+\midrule
+\tabinput{tables/ablation.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\paragraph{Accuracy differences are within run-to-run variation.}
+The run of the full configuration that serves as reference is the one that gained \(+4.3\) points over its drafts; its second run gained \(-0.8\) (Section~\ref{sec:main_results}).
+The four variants gain \(+1.3\) to \(+2.3\) points, i.e., about as much as the ungated pipeline and as the full configuration in its second run.
+We therefore do not read the \(\Delta\)~Full column as component contributions: the one nominally significant entry (without the state summary, \(-3.8\) points, \(p=0.02\)) is of the size of the difference between the two runs of the unmodified system.
+Running each variant repeatedly would be required to resolve accuracy effects of this size, and the main-result experiment suggests there are none to resolve.
+
+\paragraph{Behaviour and cost are stable and informative.}
+The behavioural columns do not depend on the sampling of drafts in the same way, and they tell a consistent story.
+Removing the state summary, validation, or the risk estimate leaves the gate's behaviour unchanged: 39--43\% of correct and 14--19\% of incorrect drafts pass, rounds stay at 2.3, and tokens at 15--16k.
+Transition validation in particular changes nothing, which is expected since its lexicon-based checks fire rarely.
+The variant \emph{without the acceptance gate}, in which the world model still validates, summarizes, and reports the risk to the meta-reviewer but acceptance follows the meta-reviewer's verdict, is the informative one: reporting the risk lowers the first-round acceptance of incorrect drafts from 85\% to 78\% while 97\% of correct drafts still pass, at 1.08 rounds and \(4.8\)k tokens---a third of the cost of gating.
+Whatever behavioural effect the full gate has on the collective's willingness to reconsider is thus obtained largely by making the risk visible, and the forced additional rounds (which cost roughly 11k tokens per question) do not turn that reconsideration into measurable accuracy.

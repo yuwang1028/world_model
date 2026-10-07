@@ -1,0 +1,81 @@
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Backbones and Inference Configuration}
+\label{sec:llm}
+
+All agents in a run share one backbone LLM. To test whether the findings depend on the backbone we use four OpenAI models that differ in capability: \texttt{gpt-3.5-turbo} (snapshot \texttt{gpt-3.5-turbo-0125}), \texttt{gpt-4o-mini} (snapshot \texttt{gpt-4o-mini-2024-07-18}), \texttt{gpt-4.1-nano} (snapshot \texttt{gpt-4.1-nano-2025-04-14}), and \texttt{gpt-4.1-mini} (snapshot \texttt{gpt-4.1-mini-2025-04-14}).
+All models are accessed through the OpenAI Chat Completions API.
+Every call uses temperature \(1.0\), the API defaults for nucleus sampling and output length, a fresh random seed, and \texttt{logprobs} enabled; the token log-probabilities are used only to compute the reviewer reliability score of Section~\ref{sec:wm}.
+No system prompt, tool, or retrieval component is used.
+All coordination strategies and all baselines use the same backbone, the same decoding configuration, and the same answer format within a comparison, so that differences in accuracy are attributable to the coordination strategy.
+The reviewer-style configurations use one author, \(k=2\) reviewers, one meta-reviewer, and at most \(N=3\) review rounds.
+
+\subsection{Benchmarks}
+
+We evaluate on eight reasoning benchmarks (Table~\ref{tab:dataset_overview}):
+\textbf{GSM8K}~\cite{cobbe2021gsm8k}, grade-school math word problems;
+\textbf{SVAMP}~\cite{patel2021svamp}, arithmetic word problems with structural perturbations;
+\textbf{GSM-Hard}~\cite{gao2023pal}, GSM8K problems with numbers replaced by large values;
+\textbf{CIAR}~\cite{liang2024mad}, counter-intuitive arithmetic reasoning problems;
+\textbf{StrategyQA}~\cite{geva2021strategyqa}, yes/no questions that require implicit multi-hop reasoning;
+and three subsets of \textbf{MMLU}~\cite{hendrycks2021mmlu}: \emph{elementary mathematics}, \emph{moral scenarios}, and \emph{professional law}.
+The first four benchmarks have numeric answers (scored correct within an absolute tolerance of \(0.01\)); the others are multiple-choice or binary and are scored by exact match of the selected option.
+
+For each benchmark we fix one list of 50 question indices (all 48 questions for CIAR), sampled once, and evaluate \emph{every} method and \emph{every} backbone on exactly these questions, giving 398 questions per backbone.
+The three reviewer-style configurations are run with all four backbones in two independent runs (1{,}592 paired questions, 3{,}184 runs per configuration in total), the external baselines once with \texttt{gpt-4.1-mini} and \texttt{gpt-4.1-nano}, and the ablations once with \texttt{gpt-4o-mini}, the backbone on which the centralized gate had the largest effect in the first run.
+A disjoint set of 30 further questions per benchmark (210 in total; CIAR has no unused questions) is reserved as a development split for the exploratory variants of Sections~\ref{sec:pilot}--\ref{sec:combined}.
+
+\begin{table}[!t]
+\caption{Evaluation Benchmarks}
+\label{tab:dataset_overview}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{llll}
+\toprule
+Benchmark & Domain & Answer & \#Q \\
+\midrule
+GSM8K & Math word problems & Numeric & 50 \\
+SVAMP & Math word problems & Numeric & 50 \\
+GSM-Hard & Math, large numbers & Numeric & 50 \\
+MMLU-Elem. & Elementary mathematics & 4-way MC & 50 \\
+CIAR & Counter-intuitive arithmetic & Numeric & 48 \\
+StrategyQA & Implicit multi-hop QA & Binary & 50 \\
+MMLU-Moral & Moral scenarios & 4-way MC & 50 \\
+MMLU-Law & Professional law & 4-way MC & 50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Compared Methods}
+
+\paragraph{Reviewer-style configurations.}
+\emph{Reviewer pipeline} is the message-based author--reviewer--meta-reviewer pipeline of MARS~\cite{wang2025mars} without any world model; it accepts a candidate when the meta-reviewer decides ``right''.
+\emph{Ours (Peer)} and \emph{Ours (Centralized)} add the world model of Section~\ref{sec:method} in the two coordination architectures.
+The three configurations share all prompts.
+
+\paragraph{External baselines.}
+We re-implement six methods in the same evaluation pipeline, with the same backbone and answer format:
+\emph{CoT}, a single chain-of-thought call~\cite{wei2022chain};
+\emph{Self-Consistency} with five samples and majority voting~\cite{wang2023selfconsistency};
+\emph{Self-Reflection}, one answer followed by one self-critique and revision~\cite{madaan2023selfrefine,shinn2023reflexion};
+\emph{Multi-Agent Debate} with three agents and two rounds~\cite{du2024improving};
+\emph{MAD} with an affirmative debater, a negative debater, and a judge that may stop the debate, for at most three rounds~\cite{liang2024mad};
+and \emph{ReConcile} with three agents, at most three discussion rounds, and confidence-weighted voting~\cite{chen2024reconcile}.
+ReConcile was proposed for a mixture of different LLMs; to keep the backbone fixed we use its single-backbone variant and omit its ``convincing samples'' component.
+We do not include AgentVerse or GPTSwarm as baselines: the former recruits task-specific expert roles and the latter optimizes a graph on a training split, so neither can be reproduced faithfully in a setting with a fixed role set and no training data.
+
+\paragraph{Ablations.}
+Starting from the centralized configuration we remove one world-model component at a time:
+(i) \emph{w/o shared state summary}: reviewers do not receive \(\sigma(s_t)\);
+(ii) \emph{w/o transition validation}: \(V\) is skipped;
+(iii) \emph{w/o trajectory risk}: \(R\) is not computed, so the risk is neither shown to the meta-reviewer nor used in the gate (the consensus and reliability conditions remain);
+(iv) \emph{w/o WM-guided acceptance}: the gate of Section~\ref{sec:gate} is removed and acceptance follows the meta-reviewer, while state, validation, and risk reporting remain.
+
+\subsection{Metrics and Statistical Analysis}
+
+We report accuracy, the average number of tokens (prompt plus completion) per question, the average number of LLM calls per question, and the average wall-clock time per question.
+Because individual benchmarks contain at most 50 questions, per-benchmark differences below roughly 15 percentage points cannot be resolved, and we base our conclusions on comparisons pooled over benchmarks. We accompany accuracy differences with paired tests: for two methods evaluated on the same questions we compute the per-question difference in correctness, a 95\% bootstrap confidence interval of its mean, and a two-sided paired sign-flip permutation test (20{,}000 permutations).
+We do not correct for multiple comparisons and therefore treat per-dataset \(p\)-values as descriptive.
+Every number in the tables and figures of this paper is generated by a single analysis script from the per-question run logs.

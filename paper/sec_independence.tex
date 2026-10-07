@@ -1,0 +1,45 @@
+\subsection{Testing the Independence Explanation}
+\label{sec:independence}
+
+If correlated errors are the obstacle, then making the reviewers more independent should reduce false consensus even without changing the gate.
+Two things could make the reviewers of Section~\ref{sec:pilot} non-independent: they share the author's backbone, and their prompt contains the author's draft (with the instruction to solve the problem first).
+We varied both, on the same development split and with the same agreement gate: \emph{blind} reviewers never see the draft and simply solve the problem; \emph{heterogeneous} reviewers use a different backbone (GPT-4o-mini) while the author keeps GPT-4.1-mini; and a variant combines both.
+Each variant was run once, and the blind same-backbone variant a second time (Table~\ref{tab:independence}).
+
+\begin{table}[!t]
+\caption{Independence interventions on the development split (210 questions, author GPT-4.1-mini; one run each, two for the blind variant). Reproduce: share of incorrect drafts for which \emph{both} reviewers independently give the author's wrong answer. Rev.\ acc.: accuracy of the reviewers' own first-round answers. Other columns as in Table~\ref{tab:gate}.}
+\label{tab:independence}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l cc c cc cc c c r}
+\toprule
+ & \multicolumn{2}{c}{Reviewers} & & \multicolumn{2}{c}{Pass in round 1} & & & & & \\
+\cmidrule(lr){2-3}\cmidrule(lr){5-6}
+Variant & see draft & backbone & Rev.\ acc. & Correct & Incorr. & Reproduce & Repaired & Net & Lost & Tokens \\
+\midrule
+Agreement gate (Sec.~\ref{sec:pilot}) & yes & same & 84 & 98 & 80 & 80 (28/35) & 71 (5/7) & $+1.9$ & 0.5 & 2.3k \\
+\quad blind reviewers, run 1 & no & same & 83 & 95 & 48 & 48 (19/40) & 43 (9/21) & $+2.4$ & 1.9 & 2.0k \\
+\quad blind reviewers, run 2 & no & same & -- & 95 & 61 & 61 (23/38) & 40 (6/15) & $+1.4$ & 1.4 & 1.7k \\
+\quad heterogeneous reviewers & yes & different & 81 & 97 & 84 & 84 (31/37) & 17 (1/6) & $-0.5$ & 1.0 & 2.4k \\
+\quad blind + heterogeneous & no & different & 78 & 84 & 42 & 42 (14/33) & 32 (6/19) & $+0.5$ & 2.4 & 2.3k \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\paragraph{Exposure to the draft, not the shared backbone, is the dominant measured source of correlation.}
+Hiding the draft from same-backbone reviewers reduces the share of incorrect drafts that both reviewers reproduce from 80\% to 48\% in one run and 61\% in a second, and reduces the share that pass the gate by the same amounts, while the reviewers' own accuracy is unchanged (83\% versus 84\%).
+Replacing the backbone of the reviewers while still showing them the draft does nothing: a different and somewhat weaker model that reads the author's answer reproduces it in 84\% of the author's failures, if anything more often than the author's own backbone does.
+Combining both interventions gives the lowest reproduction rate (42\%) but no clear additional benefit over blind same-backbone reviewers (48--61\%), and the weaker reviewers challenge more correct drafts (16\% versus 5\%).
+Reviewer skill is not the explanation: the four reviewer configurations solve the problems with similar accuracy (78--84\%) when their answers are taken on their own.
+Our results therefore indicate that, in this setting, exposure to the candidate answer rather than model identity is the dominant source of correlated reviewer errors; we do not claim that this holds for every multi-agent system, but it does show that model heterogeneity alone does not amount to independent judgment.
+
+\paragraph{Where the bottleneck sits: entry into reconsideration, not repair.}
+Reading Tables~\ref{tab:pilot} and \ref{tab:independence} together as the three stages of Section~\ref{sec:agreement} locates the failure precisely.
+Once an incorrect draft \emph{does} enter reconsideration under the agreement gate, repair is comparatively effective: 5 of 7 such drafts are fixed with draft-exposed reviewers and 9 of 21 with blind reviewers, against 5 of 27 under the risk-based gate, whose challenges carry no alternative solution.
+The dominant loss is upstream: with draft-exposed reviewers 80\% of incorrect drafts never enter reconsideration at all, because the reviewers confirm them.
+Blind review moves the collective from the first bottleneck to the second: it roughly doubles the share of errors that are challenged (from 20\% to 39--52\% across the two runs), at a cost \emph{below} that of the ungated pipeline (1.7--2.0k versus 3.4k tokens), and the remaining limit is the repair stage, where 40--43\% of challenged errors are fixed in both runs.
+The within-run gains (\(+2.4\) and \(+1.4\) points) are within the run-to-run variation documented in Table~\ref{tab:repcons}, and we draw no accuracy conclusion from 210 questions; what the experiment establishes, in both runs, is the mechanism.
+
+\paragraph{What remains.}
+The residual 42--61\% overlap of errors under blind review reflects failures that arise even without exposure to the author's draft: for these questions, independent solvers of the same or a similar model make the same mistake.
+Such errors are unlikely to be resolved by blinding alone, and they motivate stronger sources of solver diversity---different model families, tools or retrieval, or different reasoning representations---together with an external check that does not rely on agreement at all.

@@ -1,0 +1,69 @@
+\subsection{Combining Independence With External Oversight}
+\label{sec:combined}
+
+The independence interventions of Section~\ref{sec:independence} and the world-model gate of Section~\ref{sec:main_results} address different stages: the former makes the reviewers' evidence more informative, the latter decides what to do with it.
+To see whether they complement each other we crossed them on the development split (Table~\ref{tab:combined}).
+Blind reviewers in the reviewer pipeline solve the problem without seeing the draft; their review is then formed from whether their answer matches the author's, so that the meta-reviewer, the risk function, and the gate receive input in the usual format.
+We vary three further things: whether the meta-reviewer itself sees the draft (a \emph{blind judge} receives only the reviewers' solutions and their match/mismatch reports), whether a rejected author receives the reviewers' solutions in addition to the meta-review (\emph{evidence-preserving repair}), and whether the world-model gate is applied.
+The two agreement-gate variants, which replace the meta-reviewer by a rule and return the reviewers' solutions to the author, are repeated for comparison.
+
+\begin{table}[!t]
+\caption{Independence and oversight crossed on the development split (210 questions, GPT-4.1-mini, single run). Retained: among incorrect drafts flagged ``wrong'' by at least one reviewer, the number for which the meta-reviewer also decided ``wrong''. Evid.: reviewers' solutions are passed to the author on rejection. Other columns as in Table~\ref{tab:gate}.}
+\label{tab:combined}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l ccc c c cc c c c r}
+\toprule
+ & \multicolumn{3}{c}{Sees draft} & & & \multicolumn{2}{c}{Pass in round 1} & & & & \\
+\cmidrule(lr){2-4}\cmidrule(lr){7-8}
+Configuration & reviewers & judge & evid. & Gate & Retained & Correct & Incorr. & Repaired & Net & Rounds & Tokens \\
+\midrule
+Reviewer pipeline & yes & yes & no & -- & 2/4 & 100 & 95 & 100 (2/2) & $+1.0$ & 1.01 & 3.4k \\
+Centralized WM gate & yes & yes & no & WM & 4/4 & 44 & 21 & 19 (5/27) & $+2.4$ & 2.19 & 14.6k \\
+\midrule
+Blind reviewers & no & yes & no & -- & 6/19 & 99 & 83 & 50 (3/6) & $+0.5$ & 1.05 & 2.5k \\
+Blind reviewers + WM gate & no & yes & no & WM & 6/19 & 68 & 24 & 12 (3/26) & $+0.0$ & 1.70 & 5.4k \\
+\midrule
+Blind reviewers, blind judge & no & no & no & -- & 12/20 & 98 & 68 & 33 (4/12) & $+1.4$ & 1.12 & 2.8k \\
+\quad + evidence-preserving repair & no & no & yes & -- & 7/14 & 97 & 78 & 57 (4/7) & $-1.0$ & 1.08 & 2.6k \\
+\quad + evidence-preserving repair + WM gate & no & no & yes & WM & 6/14 & 70 & 19 & 28 (8/29) & $+2.4$ & 1.72 & 6.5k \\
+\midrule
+Agreement gate (rule, solutions returned) & yes & -- & yes & rule & -- & 98 & 80 & 71 (5/7) & $+1.9$ & 1.06 & 2.3k \\
+Agreement gate, blind & no & -- & yes & rule & -- & 95 & 48 & 43 (9/21) & $+2.4$ & 1.24 & 2.0k \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\paragraph{Independent evidence is lost again at the aggregation stage.}
+Blind reviewers flag 53\% of incorrect drafts (against 10\% when they see the draft), but the meta-reviewer, who does see the draft, overrules them.
+The paired transition counts make this precise: of the 36 incorrect drafts in the blind-reviewer pipeline, 19 are flagged by at least one reviewer, and the meta-reviewer retains the flag for 6 of them and overrules it for 13 (retention 32\%); none of the 17 unflagged incorrect drafts is caught by the meta-reviewer on its own.
+The judge's overruling is not a calibrated correction of the reviewers: of the 9 \emph{correct} drafts that a blind reviewer flagged, it also overruled 7.
+It acts, in effect, as a prior in favour of the draft it has read, discarding about two thirds of reviewer disagreement regardless of whether the disagreement was right.
+The same pattern holds in the gated variant (6 of 19 flags retained).
+The independence created at the reviewer stage is thus largely undone by a draft-exposed judge at the next stage.
+
+\paragraph{Blinding the judge restores most of the lost independence.}
+When the meta-reviewer is also blind, it retains 12 of 20 reviewer flags on incorrect drafts (60\%) instead of 6 of 19 (32\%), and the first-round acceptance of incorrect drafts falls from 83\% to 68\%, with 98\% of correct drafts still accepted.
+This turns Principle~2 of Section~\ref{sec:discussion} from an explanation into an intervention result: the loss at the aggregation stage is caused by the judge's exposure to the draft, and is removed by withholding it.
+The blind judge does not reach the reviewers' own detection rate (it still overrules 40\% of their flags), so some tendency to accept remains even without exposure.
+
+\paragraph{Carrying the evidence into repair raises the repair rate.}
+With a blind judge, passing the reviewers' solutions to a rejected author raises the share of challenged errors that are repaired from 33\% (4 of 12) to 57\% (4 of 7); in the gated chain it raises it from 12\% (3 of 26) to 28\% (8 of 29).
+The price is that an author confronted with alternative solutions sometimes abandons a correct answer (2.9\% of runs lost, against 0.5\% without evidence), which is the repair-stage analogue of the specificity problem at the detection stage.
+
+\paragraph{The world-model gate adds specificity, but its repair channel fails without evidence.}
+With blind reviewers the gate intercepts 76\% of incorrect drafts while passing 68\% of correct ones, against 44\% with draft-exposed reviewers: the independent evidence makes the gate's risk estimate more selective, and the combination is the most selective detector in the table at a third of the cost of the draft-exposed gate (5.4k versus 14.6k tokens).
+But only 3 of the 26 intercepted errors are repaired, because what the author receives after an interception is the meta-review, which was written by a judge who agreed with the draft, rather than the reviewers' alternative solutions.
+The rule-based agreement gate with blind reviewers, which returns those solutions, repairs 9 of 21.
+
+\paragraph{What the combination teaches.}
+In this setting, oversight and independence do complement each other, but not in the form we first built: the useful oversight is (i) an aggregation step that does not re-expose a judge to the candidate answer and (ii) a repair step that carries the independent solutions to the author.
+The full chain---blind reviewers, blind judge, world-model gate, evidence-preserving repair---is the most selective detector in Table~\ref{tab:combined} (19\% of incorrect and 70\% of correct drafts pass) and has the highest repair count of any gated configuration, at less than half the cost of the original gate; the rule-based blind agreement gate remains the cheapest configuration and the one with the highest repair rate, with weaker detection.
+The world model's risk estimate contributes selectivity once the evidence feeding it is independent; an LLM meta-reviewer that reads the draft, by contrast, reintroduces exactly the dependence that blinding removed.
+Each of these configurations was run once, so we treat the table as a behavioural decomposition and not as an accuracy ranking.
+
+\paragraph{Replication of the two headline variants.}
+We ran the blind agreement gate and the blind-reviewer world-model gate a second time on the same 210 questions.
+For the world-model gate the behavioural statistics are essentially identical across runs: 68\% and 68\% of correct drafts pass, 24\% and 24\% of incorrect drafts pass, 3 of 26 and 5 of 28 intercepted errors are repaired, and tokens are 5.4k and 5.5k.
+For the blind agreement gate the reproduction rate is 48\% in the first run and 61\% in the second (both well below the 80\% of draft-exposed reviewers), the repair rate 43\% and 40\%, and tokens 2.0k and 1.7k.
+The direction of every effect reported in this section is the same in both runs; the magnitudes vary by up to 13 points between runs, which is the precision one should attach to single-run cells of Tables~\ref{tab:independence} and \ref{tab:combined}.

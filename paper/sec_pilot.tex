@@ -1,0 +1,37 @@
+\subsection{Exploratory Variant: An Answer-Agreement Gate}
+\label{sec:pilot}
+
+The diagnosis of Section~\ref{sec:gate_results} suggests two changes: base the acceptance decision on evidence that is more directly tied to correctness than the reviewers' stated opinions, and give the author more to work with when a draft is sent back.
+We tested one simple instantiation on a development split that is disjoint from all questions used above (30 further questions from each benchmark except CIAR, which has no unused questions; 210 questions; GPT-4.1-mini, the backbone on which the centralized gate was least effective).
+In this variant there is no meta-reviewer and no risk function. Each reviewer still solves the problem itself, and a draft is accepted if and only if the final answers of all reviewers equal the author's answer. On disagreement the author receives the reviewers' complete solutions and is asked to locate the step at which they diverge before answering again; if no agreement is reached after three rounds, the majority answer is returned.
+This experiment is exploratory: it was designed after the main results were known and was run once.
+
+\begin{table}[!t]
+\caption{Exploratory Comparison on the Development Split (210 Questions, GPT-4.1-mini). Columns as in Table~\ref{tab:gate}.}
+\label{tab:pilot}
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\linewidth}{!}{\begin{tabular}{l ccc cc c r}
+\toprule
+ & \multicolumn{3}{c}{Accuracy} & \multicolumn{2}{c}{Pass in round 1} & & \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}
+Configuration & Draft & Final & Net & Correct & Incorr. & Repaired & Tokens \\
+\midrule
+Reviewer pipe. & 80.5 & 81.4 & $+1.0$ & 100 & 95 & 100 (2) & 3.4k \\
+Centralized & 83.8 & 86.2 & $+2.4$ & 44 & 21 & 19 (27) & 14.6k \\
+Agreement gate & 83.3 & 85.2 & $+1.9$ & 98 & 80 & 71 (7) & 2.3k \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Table~\ref{tab:pilot} shows that the agreement gate fixes one of the two weaknesses and exposes the other.
+It is far more selective than the risk-based gate: it accepts 98\% of correct drafts in the first round (against 44\%), so it adds almost no rounds, and it uses 0.66 times the tokens of the reviewer pipeline and 0.15 times those of the centralized configuration.
+When it does block an incorrect draft, the author repairs it in five of seven cases, compared with five of 27 for the centralized configuration, which indicates that showing the author concrete alternative solutions is more effective than returning a meta-review.
+Its within-run gain (\(+1.9\) points) is comparable to that of the centralized configuration (\(+2.4\)); neither is significant on 210 questions (\(p=0.22\) and \(p=0.06\)).
+All three configurations were run once on this split, so, as Table~\ref{tab:repcons} shows for the main split, accuracy differences of this size are within run-to-run variation; the behavioural columns (acceptance and repair rates, rounds, tokens) are the robust content of the table.
+
+The remaining weakness is recall: 80\% of incorrect drafts still pass, because in 28 of 35 cases both reviewers arrive at the same incorrect answer as the author.
+The errors of agents that share a backbone are strongly correlated, and in our pipeline the reviewer prompt also contains the author's draft, which may anchor the reviewers despite the instruction to solve the problem first.
+An acceptance test based on agreement can therefore only be as good as the independence of the solvers.
+Reviewers that never see the draft, and solvers drawn from different backbones as in ReConcile~\cite{chen2024reconcile}, are the obvious next steps; we leave them to future work and do not draw conclusions about accuracy from this exploratory comparison.

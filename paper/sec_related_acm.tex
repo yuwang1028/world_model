@@ -1,0 +1,58 @@
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Collective Intelligence and the Independence Condition}
+That a group can outperform its best member rests on conditions that have been studied for two centuries.
+Condorcet's jury theorem requires voters who are individually better than chance \emph{and} independent; with positively correlated votes the advantage of the majority shrinks and can vanish~\cite{ladha1992condorcet}.
+The ``wisdom of crowds'' literature makes the same point empirically: aggregate judgments are accurate when the errors of the members are diverse and independent, and social influence that lets members see each other's answers narrows the diversity and undermines the aggregate without making individuals more accurate~\cite{surowiecki2004wisdom,lorenz2011social}.
+Informational cascades describe the mechanism: once a few agents have committed to an answer, rational later agents follow it regardless of their private information~\cite{bikhchandani1992cascades}.
+Hong and Page showed that a group of diverse problem solvers can outperform a group of individually stronger but similar ones~\cite{hong2004groups}, and Woolley et al.\ found that a group's collective intelligence depends more on its interaction pattern than on the ability of its members~\cite{woolley2010evidence}; the Handbook of Collective Intelligence collects the design principles that follow~\cite{malone2015handbook}.
+Multi-agent LLM systems are collectives whose members are copies of one model that read each other's messages; the conditions above therefore apply to them directly, and the present paper measures how far they are violated.
+
+\subsection{LLM Self-Evaluation and Agreement}
+Several recent results bear on whether an LLM can act as an independent judge of another LLM's answer.
+Huang et al.\ show that LLMs cannot reliably self-correct their reasoning without external feedback and that prompting for reflection often makes answers worse~\cite{huang2024cannot}.
+Sharma et al.\ document sycophancy: models trained from human feedback tend to agree with a stated view rather than contradict it~\cite{sharma2024sycophancy}.
+Panickssery et al.\ show that LLM evaluators recognize and favor their own generations~\cite{panickssery2024llm}.
+Our reviewer agents are instructed to solve the problem before reading the author's answer, but they still see that answer and share its backbone; the agreement rates we measure quantify how much independence survives these instructions.
+
+\subsection{Multi-Agent LLM Reasoning}
+A growing body of work improves LLM reasoning by letting several model instances critique one another.
+Multi-agent debate lets agents exchange and revise answers over several rounds~\cite{du2024improving}; MAD assigns opposing roles to two debaters and adds a judge~\cite{liang2024mad}; ReConcile runs a round-table discussion among diverse LLMs and aggregates answers by confidence-weighted voting~\cite{chen2024reconcile}.
+Self-refinement and reflection apply the critique--revise loop within a single model~\cite{madaan2023selfrefine,shinn2023reflexion}.
+Role-based systems such as ChatDev, MetaGPT, and AutoGen organize agents into specialized roles~\cite{qian2024chatdev,hong2024metagpt,wu2024autogen}.
+Closest to our setting, MARS organizes agents as an author, independent reviewers, and a meta-reviewer, which removes reviewer-to-reviewer communication and reduces the token cost of fully connected debate~\cite{wang2025mars}; we use this reviewer-style structure as the message-based baseline.
+Beyond fixed roles, AgentVerse recruits task-specific expert agents~\cite{chen2024agentverse}, DyLAN re-weights agents during inference~\cite{liu2024dylan}, and Zhao et al.\ combine LLM agents with small models for knowledge-graph question generation~\cite{zhao2024kgqg}; MacNet, GPTSwarm, and AgentPrune treat the communication structure itself as the object of optimization~\cite{qian2025scaling,zhuge2024gptswarm,zhang2025agentprune}.
+These approaches decide \emph{who} talks to \emph{whom}; our study keeps the topology fixed and asks what the agents coordinate through and whether the collective actually corrects its members.
+
+\subsection{Memory-Based Agents and World Models}
+Memory mechanisms also structure the context of LLM agents.
+Generative Agents retrieve from a stream of observations~\cite{park2023generative}, MemGPT pages information between the context window and external storage~\cite{packer2023memgpt}, MemoryBank maintains a long-term store with forgetting~\cite{zhong2024memorybank}, Reflexion and Voyager accumulate verbal lessons and skills across episodes~\cite{shinn2023reflexion,wang2024voyager}, and CoALA organizes these designs into a taxonomy~\cite{sumers2024coala}.
+In CoALA's terms, the state store of our framework is a structured working memory for a single task.
+The difference lies in its use: memory systems decide which past information to place in the context (write, retrieve, summarize); our world model decides whether a proposed step may be committed and whether the current candidate may be accepted (typed transition, validation, trajectory risk, acceptance gate).
+Our state is not persistent across tasks, so none of the reported effects can come from cross-task memory.
+World models proper come from reinforcement learning, where they represent environment states and transitions for planning by imagined rollouts~\cite{ha2018recurrent,hafner2020dream}; in the LLM literature, RAP plans over reasoning states with the LLM as a world model~\cite{hao2023rap}, Tree-of-Thoughts searches over partial solutions~\cite{yao2023tree}, and ReAct and Toolformer couple reasoning with environment feedback~\cite{yao2023react,schick2023toolformer}.
+Our world model is far simpler than a learned dynamics model, but it is shared across agents and used for coordination.
+
+Table~\ref{tab:related_work} summarizes the positioning, including the capabilities our framework does not have.
+
+\begin{table*}[!t]
+\caption{Positioning against representative approaches (\cmark: supported; \xmark: not supported; $\circ$: partially).}
+\label{tab:related_work}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.1}
+\resizebox{\linewidth}{!}{\begin{tabular}{lccccccc}
+\toprule
+ & \makecell{Debate / MAD\\\cite{du2024improving,liang2024mad}} & \makecell{ReConcile\\\cite{chen2024reconcile}} & \makecell{MARS\\\cite{wang2025mars}} & \makecell{AgentVerse\\\cite{chen2024agentverse}} & \makecell{GPTSwarm\\\cite{zhuge2024gptswarm}} & \makecell{Memory agents\\\cite{packer2023memgpt,zhong2024memorybank}} & Ours \\
+\midrule
+Multi-agent critique of candidate answers & \cmark & \cmark & \cmark & \cmark & \cmark & \xmark & \cmark \\
+Explicit per-task state object & \xmark & \xmark & \xmark & \xmark & \xmark & $\circ$ & \cmark \\
+Validation of state transitions & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+Acceptance independent of a single agent's verdict & $\circ$ & \cmark & \xmark & $\circ$ & $\circ$ & \xmark & \cmark \\
+Persistent cross-task memory & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark & \xmark \\
+Dynamic or optimized agent topology & \xmark & \xmark & \xmark & \cmark & \cmark & \xmark & \xmark \\
+Measures agreement / correction behaviour of the collective & \xmark & \xmark & \xmark & \xmark & \xmark & \xmark & \cmark \\
+\bottomrule
+\end{tabular}}
+\end{table*}
