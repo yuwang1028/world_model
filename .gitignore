@@ -172,3 +172,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# ACM template distribution (kept locally; the needed acmart.cls and .bst are copied into paper/)
+paper/acmart-primary/
+.DS_Store

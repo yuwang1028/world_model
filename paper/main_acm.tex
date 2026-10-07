@@ -1,5 +1,31 @@
-\documentclass[acmsmall,screen,review]{acmart}
-% Version prepared for ACM Collective Intelligence. The earlier IEEE-formatted draft is main.tex.
+%% Manuscript prepared with the ACM "acmart" class (acmart-primary, v2.20), following samples/acmsmall.tex.
+%% For submission and review:  \documentclass[manuscript, screen, review]{acmart}
+%% For camera-ready:            \documentclass[acmsmall]{acmart}
+\documentclass[manuscript, screen, review]{acmart}
+
+%% \BibTeX command to typeset BibTeX logo in the docs
+\AtBeginDocument{%
+  \providecommand\BibTeX{{%
+    Bib\TeX}}}
+
+%% Rights management information. Replace with the values provided when
+%% completing the rights form.
+\setcopyright{acmlicensed}
+\copyrightyear{2026}
+\acmYear{2026}
+\acmDOI{XXXXXXX.XXXXXXX}
+
+%% Journal information. acmart v2.20 has no code for ACM Collective
+%% Intelligence; set \acmJournal to the code supplied by the journal's
+%% author instructions (the sample uses JACM as a placeholder).
+%% \acmJournal{JACM}
+\acmVolume{1}
+\acmNumber{1}
+\acmArticle{1}
+\acmMonth{10}
+
+%% Submission ID (if provided by the journal).
+%%\acmSubmissionID{}
 
 \usepackage{amsmath}
 \usepackage{algorithm}
@@ -21,21 +47,34 @@
 \newcommand{\tabinput}[1]{\@@input #1 }
 \makeatother
 
-% \acmJournal{...}  % the journal code must be set according to the journal's author template
-\acmYear{2026}
-\settopmatter{printacmref=false}
-
+%%
+%% end of the preamble, start of the body of the document source.
 \begin{document}
 
 % earlier working title: When LLM Reviewers Agree Too Much: Correlated Errors and Acceptance Mechanisms in Multi-Agent Reasoning
 \title{Independence Before Coordination: Why LLM Collectives Fail to Correct Shared Errors}
 
 \author{Yu Wang}
-\affiliation{\institution{College of Computing, Georgia Institute of Technology}\city{Atlanta}\state{GA}\country{USA}}
 \email{ywang4704@gatech.edu}
+\orcid{0000-0000-0000-0000}
+\affiliation{%
+  \institution{College of Computing, Georgia Institute of Technology}
+  \city{Atlanta}
+  \state{Georgia}
+  \country{USA}
+}
+
 \author{Vijay K. Madisetti}
-\affiliation{\institution{School of Cybersecurity and Privacy, Georgia Institute of Technology}\city{Atlanta}\state{GA}\country{USA}}
 \email{vkm@gatech.edu}
+\orcid{0000-0000-0000-0000}
+\affiliation{%
+  \institution{School of Cybersecurity and Privacy, Georgia Institute of Technology}
+  \city{Atlanta}
+  \state{Georgia}
+  \country{USA}
+}
+
+\renewcommand{\shortauthors}{Wang and Madisetti}
 
 \begin{abstract}
 Multi-agent systems built on large language models (LLMs) are collectives: an author agent proposes an answer, reviewer agents critique it, and a meta-reviewer decides.
@@ -61,6 +100,10 @@ Taken together, homogeneous LLM collectives exhibit highly correlated judgments 
 \ccsdesc[300]{Computing methodologies~Natural language processing}
 
 \keywords{collective intelligence, large language models, multi-agent reasoning, correlated errors, acceptance mechanisms, world models}
+
+\received{XX Month 2026}
+\received[revised]{XX Month 2026}
+\received[accepted]{XX Month 2026}
 
 \maketitle
 
@@ -103,6 +146,7 @@ The state-centric framework of Section~\ref{sec:method} is the instrument with w
 \begin{figure*}[!t]
     \centering
     \resizebox{\textwidth}{!}{\input{figures/fig_concept.tex}}
+    \Description{Two panel diagram. Left: author, reviewers and meta-reviewer connected through an unstructured message history. Right: the same agents connected through a world model that stores states, validates transitions, summarizes state, estimates risk and gates acceptance, with a CUI selector above.}
     \caption{Message-based coordination (a) versus the state-centric coordination studied here (b). In (b) each candidate solution is committed to a world model as an explicit state; the world model validates transitions, summarizes the state for reviewers, estimates a trajectory risk, and can gate acceptance.}
     \label{fig:concept}
 \end{figure*}
@@ -169,6 +213,7 @@ Backbone & Rev. & Peer & Centr. & Rev. & Peer & Centr. & Run 1 & Run 2 \\
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/correction_flow.pdf}
+\Description{Stacked bar charts for four backbones under ungated and gated configurations. Left: incorrect initial answers split into accepted at once, challenged but not repaired, and challenged and repaired. Right: correct initial answers split into accepted, challenged but kept, and lost.}
 \caption{Where collective correction succeeds and fails. Fate of incorrect (left) and correct (right) initial answers under the ungated reviewer pipeline and the centralized gate, for each backbone (both runs pooled). An incorrect draft is either accepted at once (false consensus), challenged but not repaired, or challenged and repaired; a correct draft is accepted, challenged but kept, or lost.}
 \label{fig:flow}
 \end{figure*}
@@ -299,6 +344,7 @@ Benchmark & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ \\
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/cui_scatter.pdf}
+\Description{Four scatter plots, one per backbone, of the peer minus centralized accuracy gap against the coordination uncertainty index for eight benchmarks.}
 \caption{CUI versus the peer$-$centralized accuracy gap. Each point is a benchmark. The sign and strength of the association differ across backbones.}
 \label{fig:cui_regime}
 \end{figure*}
@@ -306,6 +352,7 @@ Benchmark & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ & CUI & $\Delta$ \\
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/threshold_sensitivity.pdf}
+\Description{Four line plots, one per backbone, of the accuracy of the threshold policy as the threshold varies from zero to one, with horizontal reference lines for the fixed policies and the oracle.}
 \caption{Sensitivity of the CUI-adaptive policy to the threshold $\tau$ (macro-averaged accuracy over the eight benchmarks).}
 \label{fig:threshold}
 \end{figure*}
@@ -420,6 +467,7 @@ The binding constraint on these collectives is independence, as the classical th
 Generative AI tools were used in the preparation of this manuscript for language editing, for assistance with experiment and analysis code, and for producing the source code of the diagrams in Figs.~\ref{fig:concept}--\ref{fig:peer}, which are vector drawings typeset from that code. The authors reviewed all content and take full responsibility for it.
 \end{acks}
 
+%% Bibliography in the ACM reference format (ACM-Reference-Format.bst from acmart-primary)
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{references}
 

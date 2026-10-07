@@ -116,6 +116,7 @@ A candidate can therefore only be returned as the final answer if the world mode
 \begin{figure*}[!t]
     \centering
     \resizebox{0.95\textwidth}{!}{\input{figures/fig_centralized.tex}}
+    \Description{Flow diagram: the author submits actions to a shared world model that validates them and distributes a state summary to reviewers; reviews feed the world model's risk estimate and the meta-reviewer; an acceptance gate returns the final answer or sends feedback to the author.}
     \caption{Centralized world-model coordination. All agents read from and write to one shared state store; the world model validates each action, distributes the state summary, computes the trajectory risk from the reviews, and gates acceptance.}
     \label{fig:centralized}
 \end{figure*}
@@ -130,6 +131,7 @@ Peer coordination is thus the lighter mechanism. It keeps explicit state trackin
 \begin{figure*}[!t]
     \centering
     \resizebox{0.95\textwidth}{!}{\input{figures/fig_peer.tex}}
+    \Description{Flow diagram: author, reviewers and meta-reviewer each keep a local world-model replica; the author's answer and state summary travel as messages; the meta-reviewer's decision accepts the answer or returns feedback to the author.}
     \caption{Peer-to-peer world-model coordination. Each agent keeps a local world-model replica; state summaries travel inside messages, and acceptance follows the meta-reviewer's decision.}
     \label{fig:peer}
 \end{figure*}
