@@ -63,10 +63,24 @@ except Exception:  # pragma: no cover
 
 
 class PipelineRunner:
-    def __init__(self, task="gsm", model=None, use_world_model: bool = False, wm_mode: str = "centralized"):
+    def __init__(self, task="gsm", model=None, use_world_model: bool = False, wm_mode: str = "centralized",
+                 disable=(), blind_reviewers: bool = False, blind_judge: bool = False, evidence_feedback: bool = False):
         self.task = task
+        # blind_judge: the meta-reviewer sees the reviewers' independent solutions but not the author's candidate
+        # evidence_feedback: on rejection the author receives the reviewers' solutions, not only the meta-review
+        self.blind_judge = blind_judge
+        self.evidence_feedback = evidence_feedback
+        # Blind reviewers never see the author's candidate: they solve the problem themselves and their
+        # review is synthesized from whether their answer agrees with the author's.
+        self.blind_reviewers = blind_reviewers
         self.templates = PromptBuilder(task=task)
         self.model = model
+        # Ablation switches (world-model components to turn off):
+        #   "state"      -> no [WORLD_STATE] summary in reviewer prompts
+        #   "validation" -> no transition validation of drafts / revisions
+        #   "risk"       -> no rollout risk (meta prompt and acceptance gate)
+        #   "gate"       -> no world-model-guided acceptance (meta decision alone)
+        self.disable = frozenset(disable)
 
         # World-model config
         self.use_world_model = use_world_model
@@ -74,6 +88,8 @@ class PipelineRunner:
 
         # Centralized world model lives on the runner
         self.world_model = WorldModelServer(mode="centralized") if use_world_model and wm_mode == "centralized" else None
+        # Stateless probe used only to log the trajectory risk of each round (never affects decisions)
+        self._risk_probe = WorldModelServer(mode="probe")
         
         # Task-adaptive configuration for Centralized mode
         self.task_configs = {
@@ -213,13 +229,29 @@ class PipelineRunner:
                 # in peer mode, we pass only summary/pointer-like text to others (NOT shared state)
                 author_response["state_summary"] = author_state_summary
 
-            # Early correction hook (keeps pipeline intact; just adjusts answer content)
+            # Early correction hook: a rejected draft is sent back to the author once
+            if "validation" in self.disable:
+                validation = {"ok": True, "risk_score": 0.2}
+            draft_validation = validation
             if not validation.get("ok", True):
                 if verbosity:
-                    print(f"\n[WorldModel] Draft validation failed: {validation.get('reason')}")
+                    print(f"\n[WorldModel] Draft validation failed: {validation.get('suggestion')}")
                 suggestion = validation.get("suggestion") or ""
                 if suggestion:
-                    current_answer_content = suggestion
+                    author_history.append(self._validation_feedback(suggestion))
+                    author_response = author.run(author_history)
+                    author_history.append(author_response)
+                    current_answer_content = author_response["content"]
+                    action = {"type": "draft_revalidated", "content": current_answer_content}
+                    if self.wm_mode == "centralized":
+                        state_id = self._sid(shared_wm.transition(state_id, action, observation=None))
+                        author_state_summary = shared_wm.get_state_summary(state_id)
+                    else:
+                        sid_a = self._sid(wm_author.transition(None, action, observation=None))
+                        author_state_summary = wm_author.get_state_summary(sid_a)
+                        author_response["state_summary"] = author_state_summary
+            full_history["draft_validation"] = {"ok": bool(draft_validation.get("ok", True)),
+                                                "risk_score": draft_validation.get("risk_score")}
 
         # Variable to store the author's rebuttal logic to show reviewers in the next round
         latest_rebuttal_logic = "This is the initial answer."
@@ -247,7 +279,7 @@ class PipelineRunner:
                     prompt_content = self.templates.construct_reviewer_prompt(user_query, current_answer_content)
 
                     # Append world state pointer/summary (NO need to change prompt_templates.py)
-                    if self.use_world_model:
+                    if self.use_world_model and "state" not in self.disable:
                         if self.wm_mode == "centralized":
                             state_hint = (shared_wm.get_state_summary(state_id) if state_id else "")
                         else:
@@ -262,7 +294,7 @@ class PipelineRunner:
                         author_logic=latest_rebuttal_logic,
                         current_answer=current_answer_content
                     )
-                    if self.use_world_model:
+                    if self.use_world_model and "state" not in self.disable:
                         if self.wm_mode == "centralized":
                             state_hint = (shared_wm.get_state_summary(state_id) if state_id else "")
                         else:
@@ -272,8 +304,12 @@ class PipelineRunner:
                     reviewer_histories[i].append(update_msg_dict)
 
                 # RUN the reviewer
-                review_response_dict = reviewer.run(reviewer_histories[i])
-                review_content = review_response_dict["content"]
+                if self.blind_reviewers:
+                    review_response_dict, review_content = self._blind_review(reviewer, user_query, current_answer_content)
+                    reviewer_histories[i] = [{"role": "user", "content": self.templates.construct_initial_prompt(user_query)}]
+                else:
+                    review_response_dict = reviewer.run(reviewer_histories[i])
+                    review_content = review_response_dict["content"]
 
                 confidence_score = review_response_dict.get("confidence_score", 0.5)
                 formatted_review_str = (
@@ -293,13 +329,21 @@ class PipelineRunner:
                 [f"{reviewers[i].name}:\n{review_responses[i]}" for i in range(len(reviewers))]
             )
 
-            meta_input = self.templates.construct_meta_prompt(user_query, current_answer_content, combined_reviews)
+            if self.blind_judge:
+                withheld = ("[withheld] The Author's answer is not shown to you. Each Reviewer solved the problem "
+                            "independently and reports whether their own result matches the Author's result. "
+                            "Decide from the Reviewers' solutions whether the Author's answer should be accepted "
+                            "('right' only if the Reviewers' independent results support it).")
+                meta_input = self.templates.construct_meta_prompt(user_query, withheld, combined_reviews)
+            else:
+                meta_input = self.templates.construct_meta_prompt(user_query, current_answer_content, combined_reviews)
 
             # World-model rollout / risk estimation before meta decision
             risk = 0.5  # Default risk if no world model
             reviewers_consensus = 0  # Count of reviewers who agree (positive feedback)
             
-            if self.use_world_model:
+            use_risk = self.use_world_model and "risk" not in self.disable
+            if use_risk:
                 if self.wm_mode == "centralized":
                     # Pass round_idx and reviews to rollout for better risk assessment
                     rollout = shared_wm.rollout(
@@ -352,8 +396,9 @@ class PipelineRunner:
             last_round_decision = decision.lower()
             round_data["decision"] = last_round_decision
 
+            gate_log = {}
             if decision.lower() == "right":
-                if self.use_world_model and self.wm_mode == "centralized":
+                if self.use_world_model and self.wm_mode == "centralized" and "gate" not in self.disable:
                     # ========================================
                     # Centralized V2: Meta decision language analysis
                     # ========================================
@@ -417,6 +462,9 @@ class PipelineRunner:
                     # 3. Effective risk (combining WM risk and reviewer confidence)
                     # ===============================
                     effective_risk = 0.7 * risk_after_meta + 0.3 * (1 - avg_confidence)
+                    if not use_risk:
+                        # Ablation: no trajectory risk, so the risk conditions are always satisfied
+                        effective_risk = 0.0
 
                     # Task-adaptive consensus and confidence requirements
                     min_consensus = min(task_config["min_consensus"], n_reviewers)
@@ -442,6 +490,11 @@ class PipelineRunner:
                     ):
                         can_accept = True
                     
+                    gate_log = {
+                        "effective_risk": float(effective_risk),
+                        "risk_threshold": float(risk_threshold),
+                        "avg_confidence": float(avg_confidence),
+                    }
                     # Debug output
                     if verbosity:
                         print(
@@ -457,6 +510,17 @@ class PipelineRunner:
                     # Baseline or Peer mode: original behavior
                     can_accept = True
 
+            probe = self._risk_probe.rollout(None, plan={
+                "type": "evaluate_accept", "content": current_answer_content,
+                "round": round_idx, "reviews": review_responses})
+            round_data["wm"] = {
+                "risk": float(risk) if use_risk else None,
+                "risk_probe": float(probe.get("risk_score", 0.5)),
+                "consensus": int(reviewers_consensus),
+                "accepted": bool(can_accept),
+                **gate_log,
+            }
+
             if can_accept:
                 full_history["final_status"] = "accepted"
                 full_history["rounds"].append(round_data)
@@ -467,6 +531,13 @@ class PipelineRunner:
             # --- D. Feedback & Revision (Prepare for next round) ---
             if round_idx < max_rounds:
                 feedback_input = self.templates.construct_feedback_prompt(meta_decision, status=last_round_decision)
+                if self.evidence_feedback:
+                    solutions = "\n\n".join(f"Independent solver {i+1}:\n```{t}```" for i, t in enumerate(review_responses))
+                    feedback_input = dict(feedback_input)
+                    feedback_input["content"] += (
+                        "\n\n--- Independent solutions produced without seeing your answer ---\n" + solutions +
+                        "\n\nCompare these solutions with yours step by step, locate exactly where they diverge, and decide "
+                        "which step is correct before giving your revised answer in the required format.")
                 author_history.append(feedback_input)
 
                 author_rebuttal = author.run(author_history)
@@ -498,8 +569,21 @@ class PipelineRunner:
                         author_state_summary = wm_author.get_state_summary(sid_a)
                         author_response["state_summary"] = author_state_summary
 
-                    if not validation.get("ok", True) and validation.get("suggestion"):
-                        current_answer_content = validation["suggestion"]
+                    if ("validation" not in self.disable and not validation.get("ok", True)
+                            and validation.get("suggestion")):
+                        author_history.append(self._validation_feedback(validation["suggestion"]))
+                        author_rebuttal = author.run(author_history)
+                        author_history.append(author_rebuttal)
+                        current_answer_content = author_rebuttal["content"]
+                        latest_rebuttal_logic = current_answer_content
+                        action = {"type": "revision_revalidated", "content": current_answer_content}
+                        if self.wm_mode == "centralized":
+                            state_id = self._sid(shared_wm.transition(state_id, action, observation={"round": round_idx}))
+                            author_state_summary = shared_wm.get_state_summary(state_id)
+                        else:
+                            sid_a = self._sid(wm_author.transition(None, action, observation={"round": round_idx}))
+                            author_state_summary = wm_author.get_state_summary(sid_a)
+                            author_response["state_summary"] = author_state_summary
 
                 if verbosity:
                     print(f"\n=== Author's Revised Answer (Round {round_idx}) ===\n{current_answer_content}")
@@ -526,6 +610,9 @@ class PipelineRunner:
         agents = [author, *reviewers, meta]
         total_tokens = sum(agent.total_tokens for agent in agents)
         full_history["total_tokens"] = total_tokens
+        full_history["prompt_tokens"] = sum(c["prompt_tokens"] for a in agents for c in a.token_log)
+        full_history["completion_tokens"] = sum(c["completion_tokens"] for a in agents for c in a.token_log)
+        full_history["n_llm_calls"] = sum(len(a.token_log) for a in agents)
         full_history["final_answer"] = current_answer_content
         
         # Store world model references for learning (if available)
@@ -542,6 +629,41 @@ class PipelineRunner:
             full_history["peer_mode"] = True
 
         return full_history
+
+    def _blind_review(self, reviewer, user_query, author_answer):
+        """Reviewer solves the problem without seeing the draft; the review is derived from answer agreement."""
+        from utils import extract_pred_answer
+        import re as _re
+        strip = lambda t: _re.sub(r"(?<=\d),(?=\d{3})", "", t)
+        resp = reviewer.run([{"role": "user", "content": self.templates.construct_initial_prompt(user_query)}])
+        mine = extract_pred_answer(strip(resp["content"]), self.task)
+        theirs = extract_pred_answer(strip(author_answer), self.task)
+        same = mine is not None and theirs is not None and (
+            abs(mine - theirs) <= 0.01 if isinstance(mine, float) and isinstance(theirs, float) else mine == theirs)
+        fmt = lambda a: ("" if a is None else (f"{a:g}" if isinstance(a, float) else str(a)))
+        # wording chosen so that the pipeline's polarity lexicon reads it as intended
+        if same:
+            verdict = f"Comparison: My independent result ({fmt(mine)}) matches the Author's result; the answer appears right.\nDecision: right"
+        else:
+            verdict = (f"Comparison: My independent result ({fmt(mine)}) differs from the Author's result ({fmt(theirs)}); "
+                       f"one of the two contains a mistake.\nDecision: wrong")
+        text = f"My Independent Solution:\n{resp['content']}\n\n{verdict}\nFinal Answer: {fmt(mine)}"
+        return {"role": "assistant", "content": text, "confidence_score": resp.get("confidence_score", 0.5)}, text
+
+    @staticmethod
+    def _sid(result):
+        return result[0] if isinstance(result, tuple) else result
+
+    @staticmethod
+    def _validation_feedback(suggestion):
+        return {
+            "role": "user",
+            "content": (
+                "[WORLD_MODEL_VALIDATION]\n"
+                f"Your answer was flagged before review: {suggestion}\n"
+                "Re-check your reasoning and give your answer again in exactly the same required format."
+            ),
+        }
 
     def run_single_agent_pipeline(self, user_query, verbosity=0):
         agent = create_author_agent(model=self.model)

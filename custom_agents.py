@@ -18,6 +18,20 @@ reviewer_llms = config['reviewer_llms']
 meta_llm = config['meta_llm']
 
 
+# One shared client per provider (thread-safe; retries transient/rate-limit errors with backoff)
+_clients = {}
+
+
+def _get_client(provider):
+    if provider not in _clients:
+        if provider == "openai":
+            _clients[provider] = OpenAI(api_key=openai_api_key.strip(), max_retries=8, timeout=120)
+        else:
+            _clients[provider] = OpenAI(api_key=nvidia_api_key.strip(), max_retries=8, timeout=120,
+                                        base_url="https://integrate.api.nvidia.com/v1")
+    return _clients[provider]
+
+
 # ======= Definition of the OpenAI agent class ================
 class OpenAIAgent:
     def __init__(self, name, model="gpt-3.5-turbo", temperature=1.0, seed=None):
@@ -28,12 +42,12 @@ class OpenAIAgent:
         self.openai_sdk = True
         self.client = None
         if "gpt" in model:
-            self.client = OpenAI(api_key=openai_api_key)
+            self.client = _get_client("openai")
         elif "llama" in model:
             # self.client = Cerebras(api_key=cerebras_api_key)
-            self.client = OpenAI(api_key=nvidia_api_key, base_url="https://integrate.api.nvidia.com/v1")
+            self.client = _get_client("nvidia")
         elif "qwen" in model or "gemma" in model or "mistral" in model:
-            self.client = OpenAI(api_key=nvidia_api_key, base_url="https://integrate.api.nvidia.com/v1")
+            self.client = _get_client("nvidia")
         self.total_tokens = 0
         self.token_log = []
 
